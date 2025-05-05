@@ -173,3 +173,4 @@ data_process/
 batchscript-*
 results/
 internvl_chat/sampled_outputs/*
+internvl_chat/SLURM_scripts/output_logs/*
