@@ -16,6 +16,7 @@ echo "Starting SLURM script setup..."
 # Activate environment if needed
 echo "Loading uv module..."
 module load uv
+module load nccl
 echo "Changing directory..."
 cd /mnt/weka/aisg/ob1/InternVL/internvl_chat || { echo "cd failed"; exit 1; }
 echo "Activating virtual environment..."
@@ -53,5 +54,7 @@ echo "--- DIAGNOSTICS END ---"
 echo "Explicitly set CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 
 # Temporarily comment out the main command for debugging
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+export NCCL_DEBUG=INFO
 srun python tools/reasoning_data_pipeline/MARVEL_visualprm_data_pieline.py
 echo "Script finished (srun commented out)."
