@@ -19,7 +19,10 @@ module load uv
 echo "Changing directory..."
 cd /mnt/weka/aisg/ob1/InternVL/internvl_chat || { echo "cd failed"; exit 1; }
 echo "Activating virtual environment..."
-source .venv/bin/activate || { echo "source activate failed"; exit 1; }
+source .venv/bin/activate
+export PATH
+export PYTHONPATH
+export VIRTUAL_ENV
 echo "Setup complete. Virtual env activated."
 
 export MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
