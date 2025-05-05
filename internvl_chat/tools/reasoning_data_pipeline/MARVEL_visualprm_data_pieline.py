@@ -348,7 +348,8 @@ def evaluate_chat_model():
                 f'skip'
             )
             if idx % save_freq == 0 and idx < min_len:
-                save_outputs(outputs, results_file)
+                if outputs:
+                    save_outputs(outputs, results_file)
                 outputs = []
             continue
 
@@ -384,12 +385,14 @@ def evaluate_chat_model():
             )
 
         if idx % save_freq == 0 and idx < min_len:
-            save_outputs(outputs, results_file)
+            if outputs:
+                save_outputs(outputs, results_file)
             outputs = []
 
     print(f'[{localtime()}] [Rank {torch.distributed.get_rank()}] Finish to generate')
 
-    save_outputs(outputs, results_file)
+    if outputs:
+        save_outputs(outputs, results_file)
 
     print(f'[{localtime()}] [Rank {torch.distributed.get_rank()}] Finish to save outputs')
 
@@ -398,7 +401,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # base args
     parser.add_argument('--checkpoint', type=str, default='OpenGVLab/InternVL3-8B')
-    parser.add_argument('--prompt-path', type=str, default='/mnt/weka/aisg/ob1/InternVL/internvl_chat/datasets/MARVEL_AVR_flattened.jsonl')
+    parser.add_argument('--prompt-path', type=str, default='/mnt/weka/aisg/ob1/InternVL/internvl_chat/datasets/MARVEL_AVR_flattened_100.jsonl')
     parser.add_argument('--out-dir', type=str, default='sampled_outputs')
     parser.add_argument('--num-workers', type=int, default=8)
     # lmdelpoy args
