@@ -96,8 +96,12 @@ def get_global_min(value):
 
 
 def save_outputs(outputs, results_file):
-    if 'image' in outputs[0]:
-        outputs = sorted(outputs, key=lambda x:str(x['image']))
+    if not outputs:
+        print("No outputs to save")
+        return
+
+    if 'image_path' in outputs[0]:
+        outputs = sorted(outputs, key=lambda x:str(x['image_path']))
     else:
         outputs = sorted(outputs, key=lambda x:str(x['question']))
 
