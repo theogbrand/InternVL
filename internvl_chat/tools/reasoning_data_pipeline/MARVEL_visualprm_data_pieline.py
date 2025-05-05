@@ -369,9 +369,9 @@ def evaluate_chat_model():
             print(
                 f'[Start]\n'
                 f'[Prompt]\n{inputs[-1][0]}\n'
-                f'[Image]\n{outputs[-1]["image"]}\n'
+                f'[Image]\n{outputs[-1]["image_path"]}\n'
                 f'[Question]\n{outputs[-1]["question_orig"]}\n'
-                f'[Answer]\n{outputs[-1]["answer"]}\n'
+                f'[Answer]\n{outputs[-1]["correct_answer"]}\n'
                 f'[End]\n'
             )
             print_process_supervision(outputs[-1])
@@ -398,7 +398,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # base args
     parser.add_argument('--checkpoint', type=str, default='OpenGVLab/InternVL3-9B')
-    parser.add_argument('--prompt-path', type=str, default='')
+    parser.add_argument('--prompt-path', type=str, default='/mnt/weka/aisg/ob1/InternVL/internvl_chat/datasets/MARVEL_AVR_flattened.jsonl')
     parser.add_argument('--out-dir', type=str, default='sampled_outputs')
     parser.add_argument('--num-workers', type=int, default=8)
     # lmdelpoy args

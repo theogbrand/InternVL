@@ -172,3 +172,4 @@ data_process/
 
 batchscript-*
 results/
+internvl_chat/sampled_outputs/*
