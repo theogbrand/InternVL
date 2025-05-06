@@ -16,7 +16,6 @@ echo "Starting SLURM script setup..."
 # Activate environment if needed
 echo "Loading uv module..."
 module load uv
-module load nccl
 echo "Changing directory..."
 cd /home/ncs/ob1/InternVL/internvl_chat || { echo "cd failed"; exit 1; }
 echo "Activating virtual environment..."
