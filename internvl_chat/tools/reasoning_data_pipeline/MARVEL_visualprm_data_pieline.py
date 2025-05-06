@@ -401,7 +401,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # base args
     parser.add_argument('--checkpoint', type=str, default='OpenGVLab/InternVL3-8B')
-    parser.add_argument('--prompt-path', type=str, default='/mnt/weka/aisg/ob1/InternVL/internvl_chat/datasets/MARVEL_AVR_flattened_full.jsonl')
+    parser.add_argument('--prompt-path', type=str, default='/home/ncs/ob1/InternVL/internvl_chat/datasets/MARVEL_AVR_flattened_10.jsonl')
     parser.add_argument('--out-dir', type=str, default='sampled_outputs')
     parser.add_argument('--num-workers', type=int, default=8)
     # lmdelpoy args
