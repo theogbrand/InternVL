@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=marvel_dp
-#SBATCH --nodes=1
+#SBATCH --nodes=4
 #SBATCH --partition=a3mega
 #SBATCH --ntasks-per-node=8
 #SBATCH --gres=gpu:8
