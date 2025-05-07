@@ -1,6 +1,7 @@
 import json
 from collections import defaultdict
 import os
+import argparse
 
 def find_incomplete_ids(filepath: str, max_id: int, expected_count: int = 4) -> list[int]:
     """
@@ -66,19 +67,35 @@ def find_incomplete_ids(filepath: str, max_id: int, expected_count: int = 4) -> 
     return incomplete_ids
 
 # Example usage:
-file_path = '/mnt/weka/aisg/ob1/InternVL/internvl_chat/sampled_outputs/7602_100.jsonl'
-max_target_id = 100 # Example: check IDs from 1 to 100
-expected_generations = 4
-missing_or_incorrect_ids = find_incomplete_ids(file_path, max_target_id, expected_generations)
+# python /home/ncs/ob1/InternVL/internvl_chat/tools/reasoning_data_pipeline/check_jsonl.py "/home/ncs/ob1/InternVL/internvl_chat/sampled_outputs/OpenGVLab_InternVL3-8B/max_tiles_6/MARVEL_AVR_flattened_10.jsonl" 10 --expected_count 4
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Check JSONL file for incomplete IDs.")
+    # Positional arguments
+    parser.add_argument("file_path", help="Path to the JSONL file.")
+    parser.add_argument("max_target_id", type=int, help="Maximum integer ID to check (inclusive).")
+    # Optional argument
+    parser.add_argument(
+        "--expected_count",
+        type=int,
+        default=4,
+        help="Expected number of generations per ID (default: 4)."
+    )
 
-if missing_or_incorrect_ids:
-    print(f"Found {len(missing_or_incorrect_ids)} IDs in range [1, {max_target_id}] missing or with incorrect count ({expected_generations}):")
-    # Print first 10 for brevity if many are missing/incorrect
-    print(f"  {missing_or_incorrect_ids[:10]}{'...' if len(missing_or_incorrect_ids) > 10 else ''}")
+    args = parser.parse_args()
 
-else:
-    # Check if the function returned an empty list because the file didn't exist
-    # versus all IDs being present with the correct count.
-    if os.path.exists(file_path):
-         print(f"All IDs from 1 to {max_target_id} have the expected count ({expected_generations}).")
-    # else: file not found case handled by the function itself
+    # Use arguments from command line
+    # Note: variable names match the function parameters now
+    missing_or_incorrect_ids = find_incomplete_ids(args.file_path, args.max_target_id, args.expected_count)
+
+    if missing_or_incorrect_ids:
+        print(f"Found {len(missing_or_incorrect_ids)} IDs in range [1, {args.max_target_id}] missing or with incorrect count ({args.expected_count}):")
+        # Print first 10 for brevity if many are missing/incorrect
+        print(f"  {missing_or_incorrect_ids[:10]}{'...' if len(missing_or_incorrect_ids) > 10 else ''}")
+
+    else:
+        # Check if the function returned an empty list because the file didn't exist
+        # versus all IDs being present with the correct count.
+        # Use args.file_path here as well
+        if os.path.exists(args.file_path):
+             print(f"All IDs from 1 to {args.max_target_id} have the expected count ({args.expected_count}).")
+        # else: file not found case handled by the function itself
