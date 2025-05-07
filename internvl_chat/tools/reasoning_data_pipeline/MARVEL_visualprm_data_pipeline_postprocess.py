@@ -124,8 +124,8 @@ def main():
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--data-dir', type=str, default='//mnt/weka/aisg/ob1/InternVL/internvl_chat/sampled_outputs/test_dir')
-    parser.add_argument('--save-dir', type=str, default='/mnt/weka/aisg/ob1/InternVL/internvl_chat/prm_data')
+    parser.add_argument('--data-dir', type=str, default='/home/ncs/ob1/InternVL/internvl_chat/sampled_outputs/test')
+    parser.add_argument('--save-dir', type=str, default='/home/ncs/ob1/InternVL/internvl_chat/prm_data')
     parser.add_argument('--mc-threshold', type=float, default=0.0)
     parser.add_argument('--early-stop', action='store_true', default=False)
     parser.add_argument('--overwrite', action='store_true', default=False)
