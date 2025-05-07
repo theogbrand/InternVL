@@ -1,0 +1,8 @@
+{
+    "prm_train_dataset": {
+        "root": "",
+        "annotation": "/home/ncs/ob1/InternVL/internvl_chat/prm_data/raw/test_10 copy_prm.jsonl",
+        "data_augment": false,
+        "repeat_time": 1
+    }
+}
