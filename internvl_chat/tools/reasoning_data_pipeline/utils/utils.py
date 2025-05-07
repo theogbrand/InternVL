@@ -96,7 +96,7 @@ def get_global_min(value):
 
 
 def save_outputs(outputs, results_file):
-    if not outputs:
+    if not outputs: # to check why sometimes save outputs is empty
         print("No outputs to save")
         return
 

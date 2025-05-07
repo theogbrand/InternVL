@@ -8,7 +8,7 @@ from tools.reasoning_data_pipeline.utils.utils import load_outputs
 
 
 def save_outputs(outputs, results_file):
-    outputs = sorted(outputs, key=lambda x:str(x['image']))
+    outputs = sorted(outputs, key=lambda x:str(x['id']))
 
     with open(results_file, 'w') as file:
         for output in outputs:
@@ -18,7 +18,7 @@ def save_outputs(outputs, results_file):
 
 
 def item2conv_prm(item):
-    image = item['image']
+    image = item['image_path']
     question = item['question']
     steps_with_score = item['steps_with_score']
 
@@ -39,13 +39,13 @@ def item2conv_prm(item):
 
     return {
         'id': -1,
-        'image': image,
+        'image_path': image,
         'conversations': conversations,
     }
 
 
 def item2conv_orm(item):
-    image = item['image']
+    image = item['image_path']
     question = item['question']
     steps_with_score = item['steps_with_score']
 
@@ -66,7 +66,7 @@ def item2conv_orm(item):
 
     return {
         'id': -1,
-        'image': image,
+        'image_path': image,
         'conversations': conversations,
     }
 
@@ -99,7 +99,7 @@ def main():
         items = load_outputs(os.path.join(args.data_dir, filename))
 
         for item in items:
-            image = item['image']
+            image = item['image_path']
             question = item['question']
             steps_with_score = item['steps_with_score']
 
@@ -124,8 +124,8 @@ def main():
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--data-dir', type=str, default='')
-    parser.add_argument('--save-dir', type=str, default='')
+    parser.add_argument('--data-dir', type=str, default='//mnt/weka/aisg/ob1/InternVL/internvl_chat/sampled_outputs/test_dir')
+    parser.add_argument('--save-dir', type=str, default='/mnt/weka/aisg/ob1/InternVL/internvl_chat/prm_data')
     parser.add_argument('--mc-threshold', type=float, default=0.0)
     parser.add_argument('--early-stop', action='store_true', default=False)
     parser.add_argument('--overwrite', action='store_true', default=False)
