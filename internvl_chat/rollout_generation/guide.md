@@ -1,0 +1,7 @@
+1. ensure prompts and images are accessible for inference, use ```preprocessed_prompts``` folder to store the prompts with valid image paths
+
+2a. Generate rollouts using ```internvl_chat/shell/internvl3.0/visualprm_data_construction/visualprm_mmpr_8b.sh``` which uses ```internvl_chat/tools/reasoning_data_pipeline/visualprm_data_pieline.py``` to sample from the prompts provided in the ```preprocessed_prompts``` folder.
+
+2b. Depending on the average number of steps per rollout, you should get (num_preprocessed_prompts * average_steps_per_rollout) total rollouts. (e.g. MARVEL has 770 prompts and an average of 4 steps per rollout, so you should get 3080 rollouts in the ```generated_rollouts/soft_estimation/{dataset_name}``` folder)
+
+3. Finally, run the ```/data/users/brandon/ob1-projects/InternVL/internvl_chat/shell/internvl3.0/visualprm_data_construction/visualprm_build_data.sh``` to parse the rollouts step by step, and postprocess them with "soft estimation" based on the step by step MC-scores, then label +/- based on a threshold like "anything above 0.5 is +, anything below 0.5 is -" so that it is now ready to be used for training the PRM. Save this training dataset in the ```post_processed_training_dataset``` folder. You should have as many training rows here as you had in step 2b because at this point you are just "labelling" every step of the rollout based on their "future expectation" soft estimation score.
