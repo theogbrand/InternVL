@@ -374,6 +374,18 @@ def multi_choice_score(answer_pred, answer_gt):
     return answer_pred.lower() == answer_gt.lower()
 
 
+def raven_score(answer_pred, answer_gt):
+    """Exact string match for RAVEN dataset (integers 1-8)"""
+    answer_pred = answer_pred.strip()
+    answer_gt = answer_gt.strip()
+    
+    # Exact string match for integers 1-8
+    if answer_pred == answer_gt and answer_pred in ['1', '2', '3', '4', '5', '6', '7', '8']:
+        return 1
+    
+    return 0
+
+
 def parse_answer(response, prompt_version):
     if prompt_version in ['zh', 'en']:
         return extract_answer_from_mpo(response, version=prompt_version)
@@ -483,8 +495,9 @@ def extract_answer_from_xml(ans):
 
 
 def check_answer(answer_pred, answer_gt, mode):
-    if (answer_pred, answer_gt) in evaluator_cache:
-        accuracy = evaluator_cache[(answer_pred, answer_gt)]
+    # seems to be a bug here, should return the cache value if a hit, otherwise accuracy var always gets overwritten.
+    # if (answer_pred, answer_gt) in evaluator_cache:
+    #     accuracy = evaluator_cache[(answer_pred, answer_gt)]
 
     if answer_pred.lower() == answer_gt.lower():
         return 1
@@ -527,6 +540,9 @@ def check_answer(answer_pred, answer_gt, mode):
 
     if 'latex_score' in mode and (use_latex_score(answer_pred) or use_latex_score(answer_gt)):
         accuracy = max(accuracy, latex_score(answer_pred, answer_gt))
+
+    if 'raven_score' in mode:
+        accuracy = max(accuracy, raven_score(answer_pred, answer_gt))
 
     accuracy = int(accuracy > 0.9)
     evaluator_cache[(answer_pred, answer_gt)] = accuracy
@@ -599,7 +615,7 @@ def get_mode(ds_name):
         return ['vqa_score', 'mc_score', 'math_score', 'latex_score']
 
     if contain_keywords(ds_name, ['raven']) or ds_name == 'raven':
-        return ['mc_score']
+        return ['raven_score']
 
     return ['vqa_score', 'mc_score', 'math_score']
 
