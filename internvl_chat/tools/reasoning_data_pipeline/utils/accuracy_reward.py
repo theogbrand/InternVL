@@ -379,6 +379,8 @@ def parse_answer(response, prompt_version):
         return extract_answer_from_mpo(response, version=prompt_version)
     if prompt_version in ['zh_v2', 'en_v2', 'en_r1', 'zh_r1']:
         return None, extract_answer_from_box(response)
+    if prompt_version == 'raven_v1':
+        return None, extract_answer_from_xml(response)
     raise NotImplementedError(f'Unsupported prompt_version: {prompt_version}')
 
 
@@ -430,6 +432,53 @@ def extract_answer_from_box(ans):
         return ans
 
     content = ans[content_start:i]
+    return content
+
+
+def extract_answer_from_xml(ans):
+    start_tag = '<correct_answer>'
+    end_tag = '</correct_answer>'
+    
+    start_idx = ans.rfind(start_tag)
+    if start_idx == -1:
+        return ans
+    
+    start_idx += len(start_tag)
+    end_idx = ans.find(end_tag, start_idx)
+    
+    if end_idx == -1:
+        # Unmatched opening tag
+        return ans
+    
+    content = ans[start_idx:end_idx].strip()
+    
+    # Assertions for correctness
+    assert len(content) > 0, f'Empty answer content between XML tags: {ans}'
+    assert '\n' not in content, f'Answer with multiple lines: {content}'
+    assert start_tag in ans, f'Missing opening tag {start_tag}: {ans}'
+    assert end_tag in ans, f'Missing closing tag {end_tag}: {ans}'
+    assert ans.count(start_tag) == ans.count(end_tag), f'Mismatched XML tags: {ans.count(start_tag)} opening vs {ans.count(end_tag)} closing'
+    
+    # For RAVEN: extract numeric answer from potentially verbose content
+    # Look for patterns like "(1)", "1.", or standalone digits
+    import re
+    
+    # Try to find standalone digit (1-8 for RAVEN)
+    digit_match = re.search(r'\b([1-8])\b', content)
+    if digit_match:
+        return digit_match.group(1)
+    
+    # Try to find digit in parentheses like "(1)"
+    paren_match = re.search(r'\(([1-8])\)', content)
+    if paren_match:
+        return paren_match.group(1)
+    
+    # Try to find digit followed by period like "1."
+    period_match = re.search(r'\b([1-8])\.\s', content)
+    if period_match:
+        return period_match.group(1)
+    
+    # If no pattern found, return original content
     return content
 
 
@@ -548,6 +597,9 @@ def get_mode(ds_name):
 
     if contain_keywords(ds_name, ['mavis']):
         return ['vqa_score', 'mc_score', 'math_score', 'latex_score']
+
+    if contain_keywords(ds_name, ['raven']) or ds_name == 'raven':
+        return ['mc_score']
 
     return ['vqa_score', 'mc_score', 'math_score']
 
