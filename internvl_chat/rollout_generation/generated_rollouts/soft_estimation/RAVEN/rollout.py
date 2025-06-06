@@ -3,6 +3,7 @@ import sys
 import json
 import math
 import base64
+import time
 from mimetypes import guess_type
 from collections import defaultdict
 import torch
@@ -475,8 +476,8 @@ def print_process_supervision(output):
 args = {
     'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/center_single_train.jsonl',
     'out_dir': 'raven_rollouts_output',
-    'batch_size': 1,
-    'num_return_sequences': 1,
+    'batch_size': 2, # estimate rate limit of AzureOpenAI API, 
+    'num_return_sequences': 4,
     'sample_start_idx': 0,
     'sample_max_num': 50,  # Limit for testing
     'prompt_version': 'raven_v1',
@@ -509,6 +510,10 @@ print(f"Dataset loaded: {len(dataset)} samples")
 batch_size = args['batch_size']
 outputs = []
 
+# Timing statistics collection
+sample_times = []
+total_start_time = time.time()
+
 for i in range(0, min(len(dataset), batch_size)):
     sample = dataset[i]
     
@@ -520,6 +525,9 @@ for i in range(0, min(len(dataset), batch_size)):
     print(f"Image path: {sample['image_path']}")
     print(f"Correct answer: {sample['item']['correct_answer']}")
     
+    # Start timing for this sample
+    sample_start_time = time.time()
+    
     # Generate process supervision data
     curr_outputs = build_process_supervision(
         inputs=inputs, # rollout_user_prompt, image
@@ -528,12 +536,22 @@ for i in range(0, min(len(dataset), batch_size)):
         args=args
     )
     
+    # End timing for this sample
+    sample_end_time = time.time()
+    sample_duration = sample_end_time - sample_start_time
+    sample_times.append(sample_duration)
+    
+    print(f"Sample {i+1} processing time: {sample_duration:.2f} seconds")
+    
     outputs.extend(curr_outputs)
     
     # Print first output for debugging
     if i == 0:
         print("\nFirst sample output:")
         print_process_supervision(curr_outputs[0])
+
+total_end_time = time.time()
+total_duration = total_end_time - total_start_time
 
 print(f"\nGenerated {len(outputs)} rollout samples")
 
@@ -544,3 +562,59 @@ with open(output_file, 'w') as f:
         f.write(json.dumps(output) + '\n')
 
 print(f"Saved {len(outputs)} samples to {output_file}")
+
+# Print timing statistics
+if sample_times:
+    avg_time_per_sample = sum(sample_times) / len(sample_times)
+    min_time = min(sample_times)
+    max_time = max(sample_times)
+    
+    print(f"\n=== TIMING STATISTICS ===")
+    print(f"Total processing time: {total_duration:.2f} seconds")
+    print(f"Number of samples processed: {len(sample_times)}")
+    print(f"Average time per sample: {avg_time_per_sample:.2f} seconds")
+    print(f"Minimum time per sample: {min_time:.2f} seconds") 
+    print(f"Maximum time per sample: {max_time:.2f} seconds")
+    print(f"Total time breakdown:")
+    for i, duration in enumerate(sample_times):
+        print(f"  Sample {i+1}: {duration:.2f}s")
+    
+    # Estimate throughput
+    samples_per_hour = 3600 / avg_time_per_sample if avg_time_per_sample > 0 else 0
+    print(f"\nEstimated throughput: {samples_per_hour:.2f} samples/hour")
+    
+    # Estimate time for full dataset
+    if args['sample_max_num'] and args['sample_max_num'] < len(dataset):
+        estimated_total_time = avg_time_per_sample * args['sample_max_num']
+        estimated_hours = estimated_total_time / 3600
+        print(f"Estimated time for {args['sample_max_num']} samples: {estimated_hours:.2f} hours")
+
+# Display summary statistics
+total_steps = sum(len(output['steps_with_score']) for output in outputs)
+avg_steps = total_steps / len(outputs) if outputs else 0
+avg_score = sum(
+    sum(step['score'] for step in output['steps_with_score']) / len(output['steps_with_score'])
+    for output in outputs if output['steps_with_score']
+) / len(outputs) if outputs else 0
+
+print(f"\nSummary Statistics:")
+print(f"Total outputs: {len(outputs)}")
+print(f"Average steps per output: {avg_steps:.2f}")
+print(f"Average step score: {avg_score:.3f}")
+
+# Show sample output structure
+if outputs:
+    print(f"\nSample output keys: {list(outputs[0].keys())}")
+    if outputs[0]['steps_with_score']:
+        print(f"Sample step keys: {list(outputs[0]['steps_with_score'][0].keys())}")
+
+
+# TODO: Parallelize the rollouts. 
+# Based on these arguments I have set, what batch_size should I set to maximize throughput given the rate limit for the AzureOpenAI GPT-4.1 model is:
+
+# 1. Tokens-per-minute limit: 1,000,000 tokens/min
+# 2. Requests-per-minute limit: 1,000 requests/min
+
+# Other Info:
+# 1. Tokens per request: ~1,000 tokens (prompt + completion on average). can range from as low as 600 to ~2K.
+# 2. Time per request: ~30s
