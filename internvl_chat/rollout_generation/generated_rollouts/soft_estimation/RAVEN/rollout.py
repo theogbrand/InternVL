@@ -4,11 +4,14 @@ import json
 import math
 import base64
 import time
+import logging
+from datetime import datetime
 from mimetypes import guess_type
 from collections import defaultdict
 import torch
 from PIL import Image
 from openai import AzureOpenAI
+from tqdm import tqdm
 
 # Add the tools directory to the path
 sys.path.append('/data/users/brandon/ob1-projects/InternVL/internvl_chat/tools')
@@ -26,6 +29,7 @@ client = AzureOpenAI(
     api_version=api_version,
     azure_endpoint=endpoint,
     api_key=os.getenv("AZURE_API_KEY"),
+    timeout=60.0,  # 60 second timeout
 )
 
 # Function to encode a local image into data URL 
@@ -207,13 +211,17 @@ def build_responses_azure(inputs, num_return_sequences=1, prefixes=None, max_new
     for seq_idx in range(num_return_sequences): # batch sequence
         for input_idx, (prompt, image) in enumerate(inputs): # input
             try:
+                logger.info(f"Processing API call - input_idx: {input_idx}, seq_idx: {seq_idx}")
+                
                 # Convert image to data URL
                 if isinstance(image, str):
                     # If image is a path
+                    logger.debug(f"Loading image from path: {image}")
                     data_url = local_image_to_data_url(image)
                 else:
                     # If image is PIL Image, save temporarily and convert
                     temp_path = f"/tmp/temp_image_{input_idx}_{seq_idx}.png"
+                    logger.debug(f"Saving PIL image to temp path: {temp_path}")
                     image.save(temp_path)
                     data_url = local_image_to_data_url(temp_path)
                     os.remove(temp_path)
@@ -235,17 +243,23 @@ def build_responses_azure(inputs, num_return_sequences=1, prefixes=None, max_new
                         "role": "assistant", 
                         "content": prefixes[input_idx]
                     })
-                    print("--------------------------------")
-                    print(f"Sending messages with prefix array: {messages}")
-                    print("--------------------------------")
+                    logger.debug("--------------------------------")
+                    logger.debug(f"Sending messages with prefix array: {messages}")
+                    logger.debug("--------------------------------")
                 
                 # Call Azure OpenAI
+                logger.info(f"Making API call to Azure OpenAI for input_idx: {input_idx}, seq_idx: {seq_idx}")
+                start_time = time.time()
+                
                 response = client.chat.completions.create(
                     messages=messages,
                     max_completion_tokens=max_new_tokens,
                     model=deployment,
                     temperature=temperature
                 )
+                
+                api_duration = time.time() - start_time
+                logger.info(f"API call completed in {api_duration:.2f} seconds for input_idx: {input_idx}, seq_idx: {seq_idx}")
                 
                 response_text = response.choices[0].message.content
                 
@@ -257,7 +271,7 @@ def build_responses_azure(inputs, num_return_sequences=1, prefixes=None, max_new
                 batched_response_list[input_idx].append(response_text)
                 
             except Exception as e:
-                print(f"Error generating response for input {input_idx}, sequence {seq_idx}: {e}")
+                logger.error(f"Error generating response for input {input_idx}, sequence {seq_idx}: {e}")
                 batched_response_list[input_idx].append("")
     
     return sum(batched_response_list, start=[])
@@ -278,7 +292,7 @@ def build_mc_scores(inputs, response_list, items, num_return_sequences, args):
             steps = parse_response_to_perception_and_reasoning_steps_and_correct_answer(response, max_perception_steps=args.get('max_perception_steps', 12), max_reasoning_steps=args.get('max_reasoning_steps', 12))
             steps_list.append(steps)
         except Exception as e:
-            print(f"Failed to parse response: {e}")
+            logger.error(f"Failed to parse response: {e}")
             # Add dummy structure to maintain indexing
             steps_list.append({'perception_steps': ['Error parsing'], 'reasoning_steps': ['Error parsing'], 'llm_answer': 'Error'})
     
@@ -294,7 +308,7 @@ def build_mc_scores(inputs, response_list, items, num_return_sequences, args):
 
     step_cnt = 0
     while True:
-        print(f"=== STEP_CNT = {step_cnt} ===")
+        logger.info(f"=== STEP_CNT = {step_cnt} ===")
         curr_inputs_idx = []
         curr_inputs = []
         curr_prefixes = []
@@ -356,9 +370,9 @@ def build_mc_scores(inputs, response_list, items, num_return_sequences, args):
             
             curr_answer_gt.append(item['correct_answer'])
             
-            print("--------------------------------")
-            print("added current formatted_prefix for this step_cnt", formatted_prefix)
-            print("--------------------------------")
+            logger.debug("--------------------------------")
+            logger.debug(f"added current formatted_prefix for this step_cnt {formatted_prefix}")
+            logger.debug("--------------------------------")
             # why we append the formatted_prefix to another array (curr_prefixes) is so we separate this "processed input" from the input object (curr_inputs) which are the original inputs. 
             # we use curr_prefixes to add to the assisstant message to "prefill" the assistant's response
             curr_prefixes.append(formatted_prefix.strip())
@@ -376,6 +390,9 @@ def build_mc_scores(inputs, response_list, items, num_return_sequences, args):
             break
 
         # Here is where based on the current steps (prefixes), we rollout to get mc soft estimation. 
+        logger.info(f"Starting Monte Carlo rollouts for step_cnt {step_cnt} with {len(curr_inputs)} inputs")
+        mc_start_time = time.time()
+        
         mc_response_list = build_responses_azure(
             curr_inputs, 
             args.get('num_mc_sequences', 16), 
@@ -383,9 +400,12 @@ def build_mc_scores(inputs, response_list, items, num_return_sequences, args):
             max_new_tokens=args.get('max_new_tokens', 4096),
             temperature=args.get('temperature', 1.0)
         )
+        
+        mc_duration = time.time() - mc_start_time
+        logger.info(f"Monte Carlo rollouts completed in {mc_duration:.2f} seconds for step_cnt {step_cnt}")
 
-        print("mc_response_list in build_mc_scores for idx", idx, "is", mc_response_list)
-        print("length of mc_response_list", len(mc_response_list))
+        logger.debug(f"mc_response_list in build_mc_scores for idx {idx} is {mc_response_list}")
+        logger.info(f"length of mc_response_list {len(mc_response_list)}")
         # break
 
         # Here is where we get the correctness of the rollouts to label the corresponding rollout as correct or incorrect. 
@@ -393,17 +413,17 @@ def build_mc_scores(inputs, response_list, items, num_return_sequences, args):
         for mc_idx, mc_response in enumerate(mc_response_list):
             try:
                 # For RAVEN, we need to extract the final answer (number 1-8)
-                print(f"checking answer correctness for mc_response for this step_cnt {step_cnt} is {mc_response}")
+                logger.debug(f"checking answer correctness for mc_response for this step_cnt {step_cnt} is {mc_response}")
                 correctness = check_answer(
                     answer_pred=parse_answer(mc_response, prompt_version=args.get('prompt_version', 'raven_v1'))[-1], # parse based on answer format
                     answer_gt=str(curr_answer_gt[mc_idx // args.get('num_mc_sequences', 16)]),
                     mode='raven_score'  # Use RAVEN verification mode
                 )
             except Exception as e:
-                print(f'Fail to check correctness for response: {mc_response[:100]}... Error: {e}')
+                logger.error(f'Fail to check correctness for response: {mc_response[:100]}... Error: {e}')
                 correctness = 0
             correctness_list.append(correctness)
-        print(f"correctness_list for this step_cnt {step_cnt} is {correctness_list}")
+        logger.info(f"correctness_list for this step_cnt {step_cnt} is {correctness_list}")
 
         assert len(mc_response_list) == len(correctness_list)
         assert len(mc_response_list) == len(curr_inputs) * args.get('num_mc_sequences', 16)
@@ -428,14 +448,20 @@ def build_process_supervision(inputs, items, num_return_sequences, args):
     """
     Build process supervision data with step-by-step scoring
     """
+    logger.info(f"Starting initial rollout generation for {len(inputs)} inputs with {num_return_sequences} sequences each")
+    initial_start_time = time.time()
+    
     response_list = build_responses_azure(
         inputs, # rollout_user_prompt, image
         num_return_sequences,
         max_new_tokens=args.get('max_new_tokens', 4096),
         temperature=args.get('temperature', 1.0)
     )
+    
+    initial_duration = time.time() - initial_start_time
+    logger.info(f"Initial rollout generation completed in {initial_duration:.2f} seconds")
 
-    print("responses produced by build_process_supervision", response_list) # num_return_sequences = n, so n rollouts for each input image. 
+    logger.debug(f"responses produced by build_process_supervision {response_list}") # num_return_sequences = n, so n rollouts for each input image. 
     steps_with_score = build_mc_scores(inputs, response_list, items, num_return_sequences, args)
     # return
 
@@ -459,9 +485,9 @@ def print_process_supervision(output):
     Print process supervision output for debugging
     """
     steps_with_score = output['steps_with_score']
-    print('[Response] Start')
+    logger.info('[Response] Start')
     for step_idx, step in enumerate(steps_with_score):
-        print(
+        logger.info(
             f'[Steps-{step_idx}] Start\n'
             f"{step['step']}\n\n"
             f"Score: {step['score']}\n"
@@ -469,7 +495,7 @@ def print_process_supervision(output):
             f"MC Total: {step['num_mc_total']}\n"
             f'[Steps-{step_idx}] End\n'
         )
-    print('[Response] End')
+    logger.info('[Response] End')
 
 
 # Configuration parameters
@@ -477,9 +503,9 @@ args = {
     'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/center_single_train.jsonl',
     'out_dir': 'raven_rollouts_output',
     'batch_size': 2, # estimate rate limit of AzureOpenAI API, 
-    'num_return_sequences': 4,
+    'num_return_sequences': 2,
     'sample_start_idx': 0,
-    'sample_max_num': 50,  # Limit for testing
+    'sample_max_num': 4,  # Limit for testing
     'prompt_version': 'raven_v1',
     'num_mc_sequences': 4,  # Reduced for faster testing
     'max_perception_steps': 12,
@@ -492,10 +518,51 @@ args = {
 # Create output directory
 os.makedirs(args['out_dir'], exist_ok=True)
 
-print(f"Configuration: {args}")
-print(f"Using Azure OpenAI endpoint: {endpoint}")
-print(f"Model deployment: {deployment}")
+# Setup logging
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_filename = f"raven_rollout_{timestamp}_samples_{args['sample_start_idx']}_{args['sample_max_num']}.log"
+log_filepath = os.path.join(args['out_dir'], log_filename)
 
+# Create custom logger
+logger = logging.getLogger('raven_rollout')
+logger.setLevel(logging.DEBUG)  # Allow all levels to reach handlers
+
+# Create formatters
+detailed_formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+simple_formatter = logging.Formatter('%(message)s')
+
+# File handler - detailed logging (includes DEBUG)
+file_handler = logging.FileHandler(log_filepath)
+file_handler.setLevel(logging.DEBUG)  # Save all debug info to file
+file_handler.setFormatter(detailed_formatter)
+
+# Console handler via tqdm - simple logging (INFO and above only)
+class TqdmLoggingHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            tqdm.write(msg)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except:
+            self.handleError(record)
+
+console_handler = TqdmLoggingHandler()
+console_handler.setLevel(logging.INFO)  # Keep console clean, only INFO and above
+console_handler.setFormatter(simple_formatter)
+
+# Add handlers to logger
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+logger.info(f"Starting RAVEN rollout generation")
+logger.info(f"Configuration: {args}")
+logger.info(f"Using Azure OpenAI endpoint: {endpoint}")
+logger.info(f"Model deployment: {deployment}")
+logger.info(f"Log file: {log_filepath}")
 
 # Load and process RAVEN dataset
 dataset = RAVENDataset(
@@ -504,9 +571,9 @@ dataset = RAVENDataset(
     sample_start_idx=args['sample_start_idx'],
 )
 
-print(f"Dataset loaded: {len(dataset)} samples")
+logger.info(f"Dataset loaded: {len(dataset)} samples")
 
-# Process a small batch for demonstration
+# Process all samples with progress tracking
 batch_size = args['batch_size']
 outputs = []
 
@@ -514,46 +581,69 @@ outputs = []
 sample_times = []
 total_start_time = time.time()
 
-for i in range(0, min(len(dataset), batch_size)):
+# Create progress bar for the full dataset
+progress_bar = tqdm(
+    range(len(dataset)), 
+    desc=f"Processing RAVEN samples ({args['sample_start_idx']} to {args['sample_start_idx'] + len(dataset)})",
+    unit="sample"
+)
+
+for i in progress_bar:
     sample = dataset[i]
     
     # Prepare input for processing
     inputs = [(sample['rollout_user_prompt'], sample['image'])]
     items = [sample['item']]
     
-    print(f"\n[{localtime()}] Processing sample {i+1}/{min(len(dataset), batch_size)}")
-    print(f"Image path: {sample['image_path']}")
-    print(f"Correct answer: {sample['item']['correct_answer']}")
+    progress_bar.set_postfix({
+        'image': os.path.basename(sample['image_path']),
+        'correct_ans': sample['item']['correct_answer']
+    })
     
     # Start timing for this sample
     sample_start_time = time.time()
     
     # Generate process supervision data
+    logger.info(f"Starting process supervision for sample {i+1}")
     curr_outputs = build_process_supervision(
         inputs=inputs, # rollout_user_prompt, image
         items=items,
         num_return_sequences=args['num_return_sequences'],
         args=args
     )
+    logger.info(f"Completed process supervision for sample {i+1}")
     
     # End timing for this sample
     sample_end_time = time.time()
     sample_duration = sample_end_time - sample_start_time
     sample_times.append(sample_duration)
     
-    print(f"Sample {i+1} processing time: {sample_duration:.2f} seconds")
+    # Update progress bar with timing info
+    if sample_times:
+        avg_time = sum(sample_times) / len(sample_times)
+        progress_bar.set_postfix({
+            'avg_time': f"{avg_time:.1f}s",
+            'curr_time': f"{sample_duration:.1f}s",
+            'image': os.path.basename(sample['image_path'])[:20]
+        })
     
     outputs.extend(curr_outputs)
     
     # Print first output for debugging
     if i == 0:
-        print("\nFirst sample output:")
+        logger.info(f"\n[{localtime()}] First sample processing details:")
+        logger.info(f"Image path: {sample['image_path']}")
+        logger.info(f"Correct answer: {sample['item']['correct_answer']}")
+        logger.info(f"Processing time: {sample_duration:.2f} seconds")
+        logger.info("\nFirst sample output:")
         print_process_supervision(curr_outputs[0])
+
+progress_bar.close()
 
 total_end_time = time.time()
 total_duration = total_end_time - total_start_time
 
-print(f"\nGenerated {len(outputs)} rollout samples")
+logger.info(f"\nGenerated {len(outputs)} rollout samples")
 
 # Save outputs to file
 output_file = os.path.join(args['out_dir'], f'raven_rollouts_{args["sample_start_idx"]}_{args["sample_max_num"]}.jsonl')
@@ -561,7 +651,7 @@ with open(output_file, 'w') as f:
     for output in outputs:
         f.write(json.dumps(output) + '\n')
 
-print(f"Saved {len(outputs)} samples to {output_file}")
+logger.info(f"Saved {len(outputs)} samples to {output_file}")
 
 # Print timing statistics
 if sample_times:
@@ -569,25 +659,25 @@ if sample_times:
     min_time = min(sample_times)
     max_time = max(sample_times)
     
-    print(f"\n=== TIMING STATISTICS ===")
-    print(f"Total processing time: {total_duration:.2f} seconds")
-    print(f"Number of samples processed: {len(sample_times)}")
-    print(f"Average time per sample: {avg_time_per_sample:.2f} seconds")
-    print(f"Minimum time per sample: {min_time:.2f} seconds") 
-    print(f"Maximum time per sample: {max_time:.2f} seconds")
-    print(f"Total time breakdown:")
+    logger.info(f"\n=== TIMING STATISTICS ===")
+    logger.info(f"Total processing time: {total_duration:.2f} seconds")
+    logger.info(f"Number of samples processed: {len(sample_times)}")
+    logger.info(f"Average time per sample: {avg_time_per_sample:.2f} seconds")
+    logger.info(f"Minimum time per sample: {min_time:.2f} seconds") 
+    logger.info(f"Maximum time per sample: {max_time:.2f} seconds")
+    logger.info(f"Total time breakdown:")
     for i, duration in enumerate(sample_times):
-        print(f"  Sample {i+1}: {duration:.2f}s")
+        logger.info(f"  Sample {i+1}: {duration:.2f}s")
     
     # Estimate throughput
     samples_per_hour = 3600 / avg_time_per_sample if avg_time_per_sample > 0 else 0
-    print(f"\nEstimated throughput: {samples_per_hour:.2f} samples/hour")
+    logger.info(f"\nEstimated throughput: {samples_per_hour:.2f} samples/hour")
     
     # Estimate time for full dataset
     if args['sample_max_num'] and args['sample_max_num'] < len(dataset):
         estimated_total_time = avg_time_per_sample * args['sample_max_num']
         estimated_hours = estimated_total_time / 3600
-        print(f"Estimated time for {args['sample_max_num']} samples: {estimated_hours:.2f} hours")
+        logger.info(f"Estimated time for {args['sample_max_num']} samples: {estimated_hours:.2f} hours")
 
 # Display summary statistics
 total_steps = sum(len(output['steps_with_score']) for output in outputs)
@@ -597,16 +687,19 @@ avg_score = sum(
     for output in outputs if output['steps_with_score']
 ) / len(outputs) if outputs else 0
 
-print(f"\nSummary Statistics:")
-print(f"Total outputs: {len(outputs)}")
-print(f"Average steps per output: {avg_steps:.2f}")
-print(f"Average step score: {avg_score:.3f}")
+logger.info(f"\nSummary Statistics:")
+logger.info(f"Total outputs: {len(outputs)}")
+logger.info(f"Average steps per output: {avg_steps:.2f}")
+logger.info(f"Average step score: {avg_score:.3f}")
 
 # Show sample output structure
 if outputs:
-    print(f"\nSample output keys: {list(outputs[0].keys())}")
+    logger.info(f"\nSample output keys: {list(outputs[0].keys())}")
     if outputs[0]['steps_with_score']:
-        print(f"Sample step keys: {list(outputs[0]['steps_with_score'][0].keys())}")
+        logger.info(f"Sample step keys: {list(outputs[0]['steps_with_score'][0].keys())}")
+
+logger.info("RAVEN rollout generation completed successfully")
+logger.info(f"Log saved to: {log_filepath}")
 
 
 # TODO: Parallelize the rollouts. 
