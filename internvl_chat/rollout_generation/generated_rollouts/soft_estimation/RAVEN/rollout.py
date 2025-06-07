@@ -424,6 +424,8 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     mc_task_queue = []
     rollout_metadata = {}  # rollout_idx -> {steps, total_mc_tasks, completed_mc_tasks, results}
     
+    parsing_stats = {'success': 0, 'failures': 0}
+    
     for rollout_idx, response in enumerate(response_list):
         input_data = inputs[rollout_idx // num_return_sequences]
         item = items[rollout_idx // num_return_sequences]
@@ -488,9 +490,17 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
                         'answer_gt': item['correct_answer'],
                         'task_id': f"R{rollout_idx}-S{step_idx}-MC{mc_idx}"
                     })
+            
+            parsing_stats['success'] += 1
+            if rollout_idx < 3:  # Log first few successfully parsed rollouts
+                logger.info(f"✓ Rollout {rollout_idx} parsed successfully: {len(flat_steps)} steps, {total_mc_tasks} MC tasks")
+                logger.debug(f"  Rollout {rollout_idx} metadata: total_mc_tasks={rollout_metadata[rollout_idx]['total_mc_tasks']}, completed_mc_tasks={rollout_metadata[rollout_idx]['completed_mc_tasks']}")
                     
         except Exception as e:
-            logger.error(f"Failed to parse rollout {rollout_idx}: {e}")
+            logger.error(f"✗ Failed to parse rollout {rollout_idx}: {e}")
+            if rollout_idx < 5:  # Show first few parsing failures in detail
+                logger.error(f"Failed response text (first 500 chars):")
+                logger.error(response[:500] + "..." if len(response) > 500 else response)
             # Create minimal tracking for failed rollout
             rollout_metadata[rollout_idx] = {
                 'input_data': input_data,
@@ -503,10 +513,15 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
                 'mc_results': {(0, 0): ""},
                 'is_complete': True
             }
+            parsing_stats['failures'] += 1
     
     total_mc_tasks = len(mc_task_queue)
     total_rollouts = len(response_list)
     avg_mc_per_rollout = total_mc_tasks / total_rollouts
+    
+    logger.info(f"PARSING STATISTICS:")
+    logger.info(f"  ✓ Successfully parsed: {parsing_stats['success']}/{total_rollouts} rollouts ({parsing_stats['success']/total_rollouts*100:.1f}%)")
+    logger.info(f"  ✗ Failed to parse: {parsing_stats['failures']}/{total_rollouts} rollouts ({parsing_stats['failures']/total_rollouts*100:.1f}%)")
     
     logger.info(f"MC Task Queue Created:")
     logger.info(f"  Total rollouts: {total_rollouts}")
@@ -526,28 +541,38 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"Starting time-based MC processing with streaming saves")
     start_time = time.time()
     
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = []
-        
-        # Fire batches every 60 seconds
-        for batch_idx, batch_tasks in enumerate(all_batches):
-            fire_time = start_time + batch_idx * 60.0
-            current_time = time.time()
+    # Open output file immediately for true streaming (append mode to preserve existing rollouts)
+    with open(output_file, 'a', encoding='utf-8') as f:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = []
             
-            if current_time < fire_time:
-                wait_time = fire_time - current_time
-                logger.info(f"Waiting {wait_time:.1f}s to fire batch {batch_idx + 1}/{len(all_batches)}")
-                time.sleep(wait_time)
+            # Fire batches every 60 seconds to maximize 1000 RPM throughput
+            for batch_idx, batch_tasks in enumerate(all_batches):
+                fire_time = start_time + batch_idx * 60.0
+                current_time = time.time()
+                
+                if current_time < fire_time:
+                    wait_time = fire_time - current_time
+                    logger.info(f"Waiting {wait_time:.1f}s to fire batch {batch_idx + 1}/{len(all_batches)}")
+                    time.sleep(wait_time)
+                
+                logger.info(f"Firing batch {batch_idx + 1}/{len(all_batches)}: {len(batch_tasks)} MC requests")
+                future = executor.submit(process_mc_batch_simple, batch_tasks, batch_idx, args)
+                futures.append((future, batch_tasks))
             
-            logger.info(f"Firing batch {batch_idx + 1}/{len(all_batches)}: {len(batch_tasks)} MC requests")
-            future = executor.submit(process_mc_batch_simple, batch_tasks, batch_idx, args)
-            futures.append((future, batch_tasks))
-        
-        # Process results as they complete + track rollout completion
-        with open(output_file, 'w', encoding='utf-8') as f:
-            for future, batch_tasks in futures:
+            # Process results AS THEY COMPLETE (not sequentially) for true streaming
+            from concurrent.futures import as_completed
+            
+            future_to_tasks = {future: batch_tasks for future, batch_tasks in futures}
+            
+            for future in as_completed(future_to_tasks.keys()):
+                batch_tasks = future_to_tasks[future]
                 try:
                     batch_responses = future.result()
+                    
+                    # Debug: Log which batch completed
+                    batch_rollout_indices = list(set(task['rollout_idx'] for task in batch_tasks))
+                    logger.info(f"Processing completed batch with {len(batch_tasks)} tasks affecting rollouts {min(batch_rollout_indices)}-{max(batch_rollout_indices)}")
                     
                     # Process each MC result and update rollout tracking
                     for task, mc_response in zip(batch_tasks, batch_responses):
@@ -559,8 +584,13 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
                         rollout_metadata[rollout_idx]['mc_results'][(step_idx, mc_idx)] = mc_response
                         rollout_metadata[rollout_idx]['completed_mc_tasks'] += 1
                         
-                        # Check if this rollout is now complete
+                        # Check if this rollout is now complete (SUCCESS CASE)
                         rollout_meta = rollout_metadata[rollout_idx]
+                        
+                        # Debug logging for first few rollouts
+                        if rollout_idx < 5:
+                            logger.debug(f"Rollout {rollout_idx}: {rollout_meta['completed_mc_tasks']}/{rollout_meta['total_mc_tasks']} MC tasks, is_complete={rollout_meta['is_complete']}")
+                        
                         if (rollout_meta['completed_mc_tasks'] >= rollout_meta['total_mc_tasks'] and 
                             not rollout_meta['is_complete']):
                             
@@ -587,6 +617,24 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
                         rollout_idx = task['rollout_idx']
                         rollout_metadata[rollout_idx]['mc_results'][(task['step_idx'], task['mc_idx'])] = ""
                         rollout_metadata[rollout_idx]['completed_mc_tasks'] += 1
+                        
+                        # Check if this rollout is now complete due to failure
+                        rollout_meta = rollout_metadata[rollout_idx]
+                        if (rollout_meta['completed_mc_tasks'] >= rollout_meta['total_mc_tasks'] and 
+                            not rollout_meta['is_complete']):
+                            
+                            # Mark complete and save immediately
+                            rollout_meta['is_complete'] = True
+                            completed_rollouts += 1
+                            
+                            # Build final output for this rollout
+                            rollout_output = build_rollout_output(rollout_idx, rollout_meta, args)
+                            
+                            # Save to JSONL immediately
+                            f.write(json.dumps(rollout_output, ensure_ascii=False) + '\n')
+                            f.flush()  # Ensure immediate write
+                            
+                            logger.info(f"Rollout {rollout_idx} completed and saved (from failed batch) ({completed_rollouts}/{total_rollouts})")
     
     total_duration = time.time() - start_time
     actual_rate = total_mc_tasks / total_duration * 60
@@ -750,12 +798,12 @@ def print_process_supervision(output):
 args = {
     'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/center_single_train.jsonl',
     'out_dir': 'raven_rollouts_output',
-    'batch_size': 125,  # 125 samples per batch - MAXIMIZE throughput
-    'num_return_sequences': 8,  # 125×8 = 1000 requests per batch (100% RPM utilization)
+    'batch_size': 250,  # 125 samples per batch
+    'num_return_sequences': 4,  # 250×4 = 1000 requests per batch (100% RPM utilization)
     'sample_start_idx': 0,
-    'sample_max_num': 1200,  # Limit for testing
+    'sample_max_num': 6000,
     'prompt_version': 'raven_v1',
-    'num_mc_sequences': 8,  # 8 MC per step
+    'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
     'early_stop': True, # when a step results in an incorrect answer we immediately stop rollouts from THAT step.
@@ -763,6 +811,8 @@ args = {
     'temperature': 1.0,
     'max_workers': (os.cpu_count() or 4) * 8,  # 8x CPU cores for I/O-bound API calls
     'validation_threshold': 0.95,  # Minimum success rate required
+    'debug_granular': True,  # Enable granular rollout-level debug logging
+    'debug_max_rollouts': 5,  # Limit detailed logging to first N rollouts per batch to avoid log bloat
 }
 
 def main():
