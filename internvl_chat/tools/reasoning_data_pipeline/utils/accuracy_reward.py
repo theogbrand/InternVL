@@ -466,7 +466,6 @@ def extract_answer_from_xml(ans):
     
     # Assertions for correctness
     assert len(content) > 0, f'Empty answer content between XML tags: {ans}'
-    assert '\n' not in content, f'Answer with multiple lines: {content}'
     assert start_tag in ans, f'Missing opening tag {start_tag}: {ans}'
     assert end_tag in ans, f'Missing closing tag {end_tag}: {ans}'
     assert ans.count(start_tag) == ans.count(end_tag), f'Mismatched XML tags: {ans.count(start_tag)} opening vs {ans.count(end_tag)} closing'
