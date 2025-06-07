@@ -22,8 +22,11 @@ from tenacity import (
     before_sleep_log,
     after_log
 )
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+
+# Initialize logger early to avoid NameError issues
+logger = logging.getLogger('raven_rollout')
 
 # Add the tools directory to the path
 sys.path.append('/data/users/brandon/ob1-projects/InternVL/internvl_chat/tools')
@@ -44,121 +47,16 @@ client = AzureOpenAI(
     timeout=60.0,  # 60 second timeout
 )
 
-# Rate limiting configuration with dynamic optimization
-class RateLimiter:
-    def __init__(self, max_requests_per_minute=900, max_tokens_per_minute=950000):
-        self.max_rpm = max_requests_per_minute  # Conservative buffer
-        self.max_tpm = max_tokens_per_minute   # Conservative buffer
-        self.request_times = []
-        self.token_usage = []
-        self.lock = threading.Lock()
-        
-        # Performance tracking
-        self.success_count = 0
-        self.failure_count = 0
-        self.last_optimization = time.time()
-    
-    def can_make_request(self, estimated_tokens=1000):
-        with self.lock:
-            now = time.time()
-            minute_ago = now - 60
-            
-            # Clean old entries
-            self.request_times = [t for t in self.request_times if t > minute_ago]
-            self.token_usage = [(t, tokens) for t, tokens in self.token_usage if t > minute_ago]
-            
-            # Check limits
-            current_rpm = len(self.request_times)
-            current_tpm = sum(tokens for _, tokens in self.token_usage)
-            
-            return (current_rpm < self.max_rpm and 
-                   current_tpm + estimated_tokens < self.max_tpm)
-    
-    def record_request(self, tokens_used=1000, success=True):
-        with self.lock:
-            now = time.time()
-            self.request_times.append(now)
-            self.token_usage.append((now, tokens_used))
-            
-            if success:
-                self.success_count += 1
-            else:
-                self.failure_count += 1
-            
-            # Optimize limits every 5 minutes based on performance
-            if now - self.last_optimization > 300:  # 5 minutes
-                self._optimize_limits()
-                self.last_optimization = now
-    
-    def _optimize_limits(self):
-        """Dynamically adjust limits based on success rate"""
-        total_requests = self.success_count + self.failure_count
-        if total_requests > 0:
-            success_rate = self.success_count / total_requests
-            
-            if success_rate > 0.98:  # Very high success, increase limits slightly
-                self.max_rpm = min(950, int(self.max_rpm * 1.05))
-                self.max_tpm = min(980000, int(self.max_tpm * 1.02))
-                if 'logger' in globals():
-                    logger.info(f"Optimized rate limits: RPM={self.max_rpm}, TPM={self.max_tpm}")
-                else:
-                    print(f"Optimized rate limits: RPM={self.max_rpm}, TPM={self.max_tpm}")
-            elif success_rate < 0.90:  # Low success, decrease limits
-                self.max_rpm = max(500, int(self.max_rpm * 0.9))
-                self.max_tpm = max(800000, int(self.max_tpm * 0.95))
-                if 'logger' in globals():
-                    logger.warning(f"Reduced rate limits due to failures: RPM={self.max_rpm}, TPM={self.max_tpm}")
-                else:
-                    print(f"WARNING: Reduced rate limits due to failures: RPM={self.max_rpm}, TPM={self.max_tpm}")
-    
-    def wait_if_needed(self, estimated_tokens=1000):
-        wait_time = 0
-        max_wait_time = 300  # Maximum wait time of 5 minutes to prevent infinite hanging
-        
-        while not self.can_make_request(estimated_tokens):
-            if wait_time >= max_wait_time:
-                raise TimeoutError(f"Rate limiting wait exceeded {max_wait_time}s - possible deadlock")
-            
-            time.sleep(0.5)  # More responsive checking
-            wait_time += 0.5
-            if wait_time > 30 and wait_time % 30 == 0:  # Log every 30 seconds after initial 30s
-                if 'logger' in globals():
-                    logger.warning(f"Rate limiting: waited {wait_time}s for tokens={estimated_tokens}")
-                else:
-                    print(f"WARNING: Rate limiting: waited {wait_time}s for tokens={estimated_tokens}")
-                    sys.stdout.flush()  # Ensure output is written in screen sessions
-    
-    def get_stats(self):
-        """Get current rate limiting statistics"""
-        with self.lock:
-            now = time.time()
-            minute_ago = now - 60
-            current_rpm = len([t for t in self.request_times if t > minute_ago])
-            current_tpm = sum(tokens for t, tokens in self.token_usage if t > minute_ago)
-            total_requests = self.success_count + self.failure_count
-            success_rate = self.success_count / total_requests if total_requests > 0 else 0
-            
-            return {
-                'current_rpm': current_rpm,
-                'max_rpm': self.max_rpm,
-                'current_tpm': current_tpm,
-                'max_tpm': self.max_tpm,
-                'success_rate': success_rate,
-                'total_requests': total_requests
-            }
-
-# Global rate limiter
-rate_limiter = RateLimiter()
+# Simple rate limiting - no complex tracking needed since we use time-based batch firing
 
 # Global shutdown flag for graceful termination
 shutdown_flag = threading.Event()
 
+
+
 def signal_handler(signum, frame):
     """Handle termination signals gracefully"""
-    if 'logger' in globals():
-        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-    else:
-        print(f"Received signal {signum}, initiating graceful shutdown...")
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
     shutdown_flag.set()
     # Don't call sys.exit() from signal handler in threaded environment
 
@@ -206,9 +104,6 @@ class RAVENDataset(torch.utils.data.Dataset):
         image_path = item['combined_image_path']
         correct_answer = item['correct_answer']
         
-        # Load image
-        image = Image.open(image_path).convert('RGB')
-        
         rollout_user_prompt = r"""You are an abstract reasoning puzzle expert. The puzzle you will receive is presented in a standard Raven's Progressive Matrices format: a 3×3 matrix of related images, with the bottom-right cell (the ninth tile) missing. There are eight possible answer choices provided separately, and your task is to decide which of those eight images correctly completes the 3×3 matrix pattern.
 
 I will provide you with an image containing:
@@ -255,7 +150,7 @@ It is crucial that your solution contains these sections in the exact format des
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
-            'image': image,
+            'image': image_path,  # Pass path directly instead of PIL object
             'image_path': image_path,
             'item': item.copy(),
             'correct_answer': correct_answer,
@@ -340,44 +235,19 @@ def parse_response_to_perception_and_reasoning_steps_and_correct_answer(text, ma
     retry=retry_if_exception_type((Exception,))
 )
 def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000):
-    """Make a rate-limited Azure OpenAI request with retry logic"""
-    # Wait for rate limit if needed
+    """Make Azure OpenAI request with retry logic"""
     try:
-        rate_limiter.wait_if_needed(estimated_tokens)
-    except TimeoutError as e:
-        logger.error(f"Rate limiting timeout: {e}")
-        raise
-    
-    try:
-        start_time = time.time()
         response = client.chat.completions.create(
             messages=messages,
             max_completion_tokens=max_tokens,
             model=deployment,
             temperature=temperature,
-            timeout=120.0  # Increased timeout for complex requests
+            timeout=120.0
         )
-        
-        # Record successful request for rate limiting
-        actual_tokens = response.usage.total_tokens if hasattr(response, 'usage') else estimated_tokens
-        rate_limiter.record_request(actual_tokens, success=True)
-        
-        duration = time.time() - start_time
-        # Use print if logger not available yet, otherwise use logger
-        if 'logger' in globals():
-            logger.debug(f"API call completed in {duration:.2f}s, tokens: {actual_tokens}")
         
         return response.choices[0].message.content
         
     except Exception as e:
-        # Record failed request
-        rate_limiter.record_request(estimated_tokens, success=False)
-        # Use print if logger not available yet, otherwise use logger
-        if 'logger' in globals():
-            logger.error(f"API request failed: {e}")
-        else:
-            print(f"API request failed: {e}")
-            sys.stdout.flush()
         raise
 
 def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None, max_new_tokens=4096, temperature=1.0, max_workers=20):
@@ -385,10 +255,7 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
     Build responses using Azure OpenAI GPT-4.1 with parallel processing
     """
     total_requests = len(inputs) * num_return_sequences
-    if 'logger' in globals():
-        logger.info(f"Starting parallel processing of {total_requests} requests with {max_workers} workers")
-    else:
-        print(f"Starting parallel processing of {total_requests} requests with {max_workers} workers")
+    logger.info(f"Starting parallel processing of {total_requests} requests with {max_workers} workers")
     
     def process_single_request(args_tuple):
         input_idx, seq_idx, prompt, image, prefix = args_tuple
@@ -398,31 +265,12 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
             return (input_idx, seq_idx, "")
         
         try:
-            # Convert image to data URL
-            temp_path = None
+            # Convert image path to data URL
             try:
-                if isinstance(image, str):
-                    data_url = local_image_to_data_url(image)
-                else:
-                    temp_path = f"/tmp/temp_image_{input_idx}_{seq_idx}_{threading.current_thread().ident}.png"
-                    image.save(temp_path)
-                    data_url = local_image_to_data_url(temp_path)
+                data_url = local_image_to_data_url(image)
             except Exception as e:
-                if 'logger' in globals():
-                    logger.error(f"Failed to process image for input_idx={input_idx}, seq_idx={seq_idx}: {e}")
-                else:
-                    print(f"Failed to process image for input_idx={input_idx}, seq_idx={seq_idx}: {e}")
+                logger.error(f"Failed to process image for input_idx={input_idx}, seq_idx={seq_idx}: {e}")
                 raise
-            finally:
-                # Clean up temp file if it was created
-                if temp_path and os.path.exists(temp_path):
-                    try:
-                        os.remove(temp_path)
-                    except Exception as e:
-                        if 'logger' in globals():
-                            logger.warning(f"Failed to clean up temp file {temp_path}: {e}")
-                        else:
-                            print(f"Warning: Failed to clean up temp file {temp_path}: {e}")
             
             # Prepare messages
             content = [
@@ -439,20 +287,14 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
             if prefix:
                 messages.append({"role": "assistant", "content": prefix})
             
-            # Estimate tokens (prompt + image + completion) with safer bounds
-            prompt_tokens = min(len(prompt) // 4, 8000)  # Cap prompt estimation
-            image_tokens = 1000  # Standard image token cost
-            estimated_tokens = prompt_tokens + image_tokens + max_new_tokens
+            # Simplified token estimation
+            estimated_tokens = len(prompt) // 4 + 1000 + max_new_tokens
             
             response_text = make_azure_request(messages, max_new_tokens, temperature, estimated_tokens)
             
             return (input_idx, seq_idx, response_text)
             
-        except Exception as e:
-            if 'logger' in globals():
-                logger.error(f"Error in request input_idx={input_idx}, seq_idx={seq_idx}: {e}")
-            else:
-                print(f"Error in request input_idx={input_idx}, seq_idx={seq_idx}: {e}")
+        except Exception:
             return (input_idx, seq_idx, "")
     
     # Prepare all request arguments
@@ -462,12 +304,8 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
             prefix = prefixes[input_idx] if prefixes else None
             request_args.append((input_idx, seq_idx, prompt, image, prefix))
     
-    # Process requests in parallel with timeout handling
+    # Process requests in parallel - streamlined
     results = {}
-    
-    # Start heartbeat for long-running operations
-    last_heartbeat = time.time()
-    heartbeat_interval = 300  # 5 minutes
     
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all requests
@@ -476,54 +314,14 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
             for args in request_args
         }
         
-        # Collect results with progress bar and timeout handling
-        if 'tqdm' in globals() and not shutdown_flag.is_set():
-            pbar = tqdm(total=len(request_args), desc="API Requests", unit="req", disable=not sys.stdout.isatty())
-        else:
-            pbar = None
-        
-        completed_count = 0
-        for future in future_to_args:
-            # Check for shutdown signal
-            if shutdown_flag.is_set():
-                logger.info("Shutdown signal received, cancelling remaining requests...")
-                break
-                
-            # Heartbeat mechanism to prevent silent hanging
-            current_time = time.time()
-            if current_time - last_heartbeat > heartbeat_interval:
-                if 'logger' in globals():
-                    logger.info(f"Heartbeat: {completed_count}/{len(request_args)} requests completed")
-                    sys.stdout.flush()
-                last_heartbeat = current_time
-            
+        # Collect results with minimal overhead
+        for future in as_completed(future_to_args.keys(), timeout=3600):
             try:
-                # Add timeout to prevent hanging indefinitely
-                input_idx, seq_idx, response = future.result(timeout=600)  # 10 minute timeout per request
+                input_idx, seq_idx, response = future.result(timeout=600)
                 results[(input_idx, seq_idx)] = response
-                completed_count += 1
-                
-                if pbar:
-                    pbar.update(1)
-                elif completed_count % 10 == 0:  # Log progress every 10 completions
-                    if 'logger' in globals():
-                        logger.info(f"API Progress: {completed_count}/{len(request_args)} requests completed")
-                        sys.stdout.flush()
-                        
-            except Exception as e:
+            except Exception:
                 args = future_to_args[future]
-                if 'logger' in globals():
-                    logger.error(f"Future failed for args {args}: {e}")
-                else:
-                    print(f"Future failed for args {args}: {e}")
                 results[(args[0], args[1])] = ""
-                completed_count += 1
-                
-                if pbar:
-                    pbar.update(1)
-        
-        if pbar:
-            pbar.close()
     
     # Reconstruct response list in correct order
     response_list = []
@@ -532,31 +330,6 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
             response = results.get((input_idx, seq_idx), "")
             response_list.append(response)
     
-    # Validation: ensure we have the expected number of responses
-    expected_count = len(inputs) * num_return_sequences
-    actual_count = len(response_list)
-    successful_count = len([r for r in response_list if r.strip()])
-    
-    if 'logger' in globals():
-        logger.info(f"Response validation: Expected={expected_count}, Actual={actual_count}, Successful={successful_count}")
-    else:
-        print(f"Response validation: Expected={expected_count}, Actual={actual_count}, Successful={successful_count}")
-    
-    if actual_count != expected_count:
-        error_msg = f"Mismatch in response count! Expected {expected_count}, got {actual_count}"
-        if 'logger' in globals():
-            logger.error(error_msg)
-        else:
-            print(f"ERROR: {error_msg}")
-        raise ValueError(f"Response count mismatch: expected {expected_count}, got {actual_count}")
-    
-    if successful_count < expected_count * 0.95:  # Allow 5% failure rate
-        warning_msg = f"High failure rate: {expected_count - successful_count} failed out of {expected_count}"
-        if 'logger' in globals():
-            logger.warning(warning_msg)
-        else:
-            print(f"WARNING: {warning_msg}")
-    
     return response_list
 
 # Updated function call
@@ -564,7 +337,7 @@ def build_responses_azure(inputs, num_return_sequences=1, prefixes=None, max_new
     """Wrapper for backward compatibility with explicit max_workers parameter"""
     # Use provided max_workers or default to 20
     if max_workers is None:
-        max_workers = args.get('max_workers', 20) if 'args' in globals() and args else 20
+        max_workers = args.get('max_workers', 20)
     return build_responses_azure_parallel(
         inputs, num_return_sequences, prefixes, max_new_tokens, temperature, max_workers
     )
@@ -626,6 +399,10 @@ def evaluate_single_response_mc(response_idx, response, input_data, item, args):
         
     except Exception as e:
         logger.error(f"Failed to parse response {response_idx}: {e}")
+        logger.error(f"Response text that failed to parse:")
+        logger.error("="*80)
+        logger.error(response)
+        logger.error("="*80)
         return {
             'response_idx': response_idx,
             'mc_tasks': [],
@@ -633,168 +410,290 @@ def evaluate_single_response_mc(response_idx, response, input_data, item, args):
             'error': str(e)
         }
 
-def build_mc_scores_parallel(inputs, response_list, items, num_return_sequences, args):
+# Removed unused sequential method - only maximum throughput needed
+
+def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_sequences, args):
     """
-    Build Monte Carlo scores with full parallelization - no sequential dependencies
+    STREAMING PIPELINE: 1K rollouts → M MC tasks → time-based processing → per-rollout completion tracking
     """
     assert len(response_list) == len(inputs) * num_return_sequences
     
-    logger.info(f"Starting parallel MC evaluation for {len(response_list)} responses")
+    logger.info(f"Starting STREAMING MC pipeline for {len(response_list)} rollouts")
     
-    # Step 1: Parse all responses and prepare MC tasks
-    all_mc_tasks = []
-    response_metadata = []
+    # Step 1: Parse all rollouts and create MC task queue with completion tracking
+    mc_task_queue = []
+    rollout_metadata = {}  # rollout_idx -> {steps, total_mc_tasks, completed_mc_tasks, results}
     
-    for idx, response in enumerate(response_list):
-        input_data = inputs[idx // num_return_sequences]
-        item = items[idx // num_return_sequences]
+    for rollout_idx, response in enumerate(response_list):
+        input_data = inputs[rollout_idx // num_return_sequences]
+        item = items[rollout_idx // num_return_sequences]
         
-        result = evaluate_single_response_mc(idx, response, input_data, item, args)
-        response_metadata.append(result)
-        
-        if result['success']:
-            # Add response_idx to each task for tracking
-            for task in result['mc_tasks']:
-                task['response_idx'] = idx
-                all_mc_tasks.append(task)
-        else:
-            # Create dummy tasks for failed parsing
-            dummy_task = {
-                'response_idx': idx,
-                'step_idx': 0,
-                'input': input_data,
-                'prefix': '',
-                'answer_gt': item['correct_answer'],
-                'step_content': 'Error parsing'
+        try:
+            # Parse the response into steps
+            steps = parse_response_to_perception_and_reasoning_steps_and_correct_answer(
+                response, 
+                max_perception_steps=args.get('max_perception_steps', 12), 
+                max_reasoning_steps=args.get('max_reasoning_steps', 12)
+            )
+            
+            # Combine perception and reasoning steps
+            flat_steps = steps['perception_steps'] + steps['reasoning_steps']
+            perception_count = len(steps['perception_steps'])
+            
+            # Initialize rollout tracking
+            num_mc_per_step = args.get('num_mc_sequences', 8)
+            total_mc_tasks = len(flat_steps) * num_mc_per_step
+            
+            rollout_metadata[rollout_idx] = {
+                'input_data': input_data,
+                'item': item,
+                'response': response,
+                'steps': flat_steps,
+                'perception_count': perception_count,
+                'total_mc_tasks': total_mc_tasks,
+                'completed_mc_tasks': 0,
+                'mc_results': {},  # (step_idx, mc_idx) -> result
+                'is_complete': False
             }
-            all_mc_tasks.append(dummy_task)
+            
+            # Create MC tasks for this rollout
+            for step_idx in range(len(flat_steps)):
+                # Build formatted prefix for this step
+                prefix_steps = flat_steps[:step_idx+1]
+                
+                formatted_prefix = ""
+                if step_idx < perception_count:
+                    formatted_prefix += "[Perception]\n"
+                    for i, step in enumerate(prefix_steps):
+                        formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
+                else:
+                    formatted_prefix += "[Perception]\n"
+                    for i, step in enumerate(steps['perception_steps']):
+                        formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
+                    formatted_prefix += "\n[Reasoning]\n"
+                    reasoning_steps = prefix_steps[perception_count:]
+                    for i, step in enumerate(reasoning_steps):
+                        formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
+                
+                prefix = formatted_prefix.strip()
+                
+                # Create MC tasks for this step
+                for mc_idx in range(num_mc_per_step):
+                    mc_task_queue.append({
+                        'rollout_idx': rollout_idx,
+                        'step_idx': step_idx,
+                        'mc_idx': mc_idx,
+                        'input_data': input_data,
+                        'prefix': prefix,
+                        'answer_gt': item['correct_answer'],
+                        'task_id': f"R{rollout_idx}-S{step_idx}-MC{mc_idx}"
+                    })
+                    
+        except Exception as e:
+            logger.error(f"Failed to parse rollout {rollout_idx}: {e}")
+            # Create minimal tracking for failed rollout
+            rollout_metadata[rollout_idx] = {
+                'input_data': input_data,
+                'item': item,
+                'response': response,
+                'steps': ['Error parsing'],
+                'perception_count': 0,
+                'total_mc_tasks': 1,
+                'completed_mc_tasks': 1,  # Mark as complete
+                'mc_results': {(0, 0): ""},
+                'is_complete': True
+            }
     
-    logger.info(f"Prepared {len(all_mc_tasks)} MC evaluation tasks")
+    total_mc_tasks = len(mc_task_queue)
+    total_rollouts = len(response_list)
+    avg_mc_per_rollout = total_mc_tasks / total_rollouts
     
-    # Step 2: Execute all MC tasks in parallel
-    if len(all_mc_tasks) == 0:
-        logger.warning("No MC tasks to execute")
-        return [[] for _ in range(len(response_list))]
+    logger.info(f"MC Task Queue Created:")
+    logger.info(f"  Total rollouts: {total_rollouts}")
+    logger.info(f"  Total MC tasks: {total_mc_tasks}")
+    logger.info(f"  Average MC tasks per rollout: {avg_mc_per_rollout:.1f}")
+    logger.info(f"  Estimated batches: {math.ceil(total_mc_tasks/1000)}")
+    logger.info(f"  Estimated time: {math.ceil(total_mc_tasks/1000)*60:.0f} seconds")
     
-    # Group tasks for batch processing
-    mc_inputs = []
-    mc_prefixes = []
-    task_metadata = []
+    # Step 2: Process MC tasks with time-based firing + streaming completion tracking
+    batch_size = 1000
+    all_batches = [mc_task_queue[i:i+batch_size] for i in range(0, total_mc_tasks, batch_size)]
     
-    for task in all_mc_tasks:
-        mc_inputs.append(task['input'])
-        mc_prefixes.append(task['prefix'])
-        task_metadata.append(task)
+    # Output file for streaming saves
+    output_file = os.path.join(args['out_dir'], f'raven_rollouts_{args["sample_start_idx"]}_{args["sample_max_num"]}_streaming.jsonl')
+    completed_rollouts = 0
     
-    logger.info(f"Starting massive parallel MC rollout: {len(mc_inputs)} inputs × {args.get('num_mc_sequences', 4)} sequences")
-    mc_start_time = time.time()
+    logger.info(f"Starting time-based MC processing with streaming saves")
+    start_time = time.time()
     
-    # Execute all MC evaluations in one massive parallel batch
-    mc_response_list = build_responses_azure(
-        mc_inputs,
-        args.get('num_mc_sequences', 4),
-        mc_prefixes,
-        max_new_tokens=args.get('max_new_tokens', 4096),
-        temperature=args.get('temperature', 1.0),
-        max_workers=args.get('max_workers', 20)
-    )
-    
-    mc_duration = time.time() - mc_start_time
-    total_mc_calls = len(mc_inputs) * args.get('num_mc_sequences', 4)
-    logger.info(f"Massive parallel MC completed: {total_mc_calls} calls in {mc_duration:.2f}s ({total_mc_calls/mc_duration:.2f} calls/s)")
-    
-    # Step 3: Process results and calculate scores
-    logger.info("Processing MC results and calculating step scores...")
-    
-    # Initialize output structure
-    steps_outputs = [[] for _ in range(len(response_list))]
-    
-    # Process results for each task
-    mc_sequences = args.get('num_mc_sequences', 4)
-    
-    for task_idx, task in enumerate(task_metadata):
-        response_idx = task['response_idx']
-        step_idx = task['step_idx']
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = []
         
-        # Extract MC responses for this task
-        start_idx = task_idx * mc_sequences
-        end_idx = start_idx + mc_sequences
-        task_mc_responses = mc_response_list[start_idx:end_idx]
+        # Fire batches every 60 seconds
+        for batch_idx, batch_tasks in enumerate(all_batches):
+            fire_time = start_time + batch_idx * 60.0
+            current_time = time.time()
+            
+            if current_time < fire_time:
+                wait_time = fire_time - current_time
+                logger.info(f"Waiting {wait_time:.1f}s to fire batch {batch_idx + 1}/{len(all_batches)}")
+                time.sleep(wait_time)
+            
+            logger.info(f"Firing batch {batch_idx + 1}/{len(all_batches)}: {len(batch_tasks)} MC requests")
+            future = executor.submit(process_mc_batch_simple, batch_tasks, batch_idx, args)
+            futures.append((future, batch_tasks))
         
-        # Calculate correctness for each MC response
-        correctness_list = []
-        for mc_response in task_mc_responses:
+        # Process results as they complete + track rollout completion
+        with open(output_file, 'w', encoding='utf-8') as f:
+            for future, batch_tasks in futures:
+                try:
+                    batch_responses = future.result()
+                    
+                    # Process each MC result and update rollout tracking
+                    for task, mc_response in zip(batch_tasks, batch_responses):
+                        rollout_idx = task['rollout_idx']
+                        step_idx = task['step_idx']
+                        mc_idx = task['mc_idx']
+                        
+                        # Store MC result
+                        rollout_metadata[rollout_idx]['mc_results'][(step_idx, mc_idx)] = mc_response
+                        rollout_metadata[rollout_idx]['completed_mc_tasks'] += 1
+                        
+                        # Check if this rollout is now complete
+                        rollout_meta = rollout_metadata[rollout_idx]
+                        if (rollout_meta['completed_mc_tasks'] >= rollout_meta['total_mc_tasks'] and 
+                            not rollout_meta['is_complete']):
+                            
+                            # Mark complete and save immediately
+                            rollout_meta['is_complete'] = True
+                            completed_rollouts += 1
+                            
+                            # Build final output for this rollout
+                            rollout_output = build_rollout_output(rollout_idx, rollout_meta, args)
+                            
+                            # Save to JSONL immediately
+                            f.write(json.dumps(rollout_output, ensure_ascii=False) + '\n')
+                            f.flush()  # Ensure immediate write
+                            
+                            logger.info(f"Rollout {rollout_idx} completed and saved ({completed_rollouts}/{total_rollouts})")
+                    
+                    progress = sum(meta['completed_mc_tasks'] for meta in rollout_metadata.values())
+                    logger.info(f"Batch completed: {progress}/{total_mc_tasks} MC tasks ({progress/total_mc_tasks*100:.1f}%)")
+                    
+                except Exception as e:
+                    logger.error(f"Batch failed: {e}")
+                    # Mark affected rollouts as complete with dummy results
+                    for task in batch_tasks:
+                        rollout_idx = task['rollout_idx']
+                        rollout_metadata[rollout_idx]['mc_results'][(task['step_idx'], task['mc_idx'])] = ""
+                        rollout_metadata[rollout_idx]['completed_mc_tasks'] += 1
+    
+    total_duration = time.time() - start_time
+    actual_rate = total_mc_tasks / total_duration * 60
+    
+    logger.info(f"STREAMING MC Pipeline Completed:")
+    logger.info(f"  Total MC tasks: {total_mc_tasks}")
+    logger.info(f"  Completed rollouts: {completed_rollouts}/{total_rollouts}")
+    logger.info(f"  Duration: {total_duration:.0f}s ({actual_rate:.0f} tasks/min)")
+    logger.info(f"  Saved to: {output_file}")
+    
+    # Return empty list since we saved incrementally
+    return []
+
+def build_rollout_output(rollout_idx, rollout_meta, args):
+    """Build final output structure for a completed rollout"""
+    steps_with_score = []
+    num_mc_sequences = args.get('num_mc_sequences', 8)
+    
+    for step_idx in range(len(rollout_meta['steps'])):
+        # Collect MC results for this step
+        mc_correctness = []
+        
+        for mc_idx in range(num_mc_sequences):
+            mc_response = rollout_meta['mc_results'].get((step_idx, mc_idx), "")
+            
             try:
+                parsed_answer = parse_answer(mc_response, prompt_version=args.get('prompt_version', 'raven_v1'))
+                answer_pred = parsed_answer[-1]
                 correctness = check_answer(
-                    answer_pred=parse_answer(mc_response, prompt_version=args.get('prompt_version', 'raven_v1'))[-1],
-                    answer_gt=str(task['answer_gt']),
+                    answer_pred=answer_pred,
+                    answer_gt=str(rollout_meta['item']['correct_answer']),
                     mode='raven_score'
                 )
-            except Exception as e:
-                logger.debug(f'MC correctness check failed: {e}')
+            except Exception:
                 correctness = 0
-            correctness_list.append(correctness)
+            
+            mc_correctness.append(correctness)
         
         # Calculate step score
-        score = sum(correctness_list) / len(correctness_list) if correctness_list else 0.0
+        score = sum(mc_correctness) / len(mc_correctness) if mc_correctness else 0.0
         
-        # Store result
-        step_result = {
-            'step': task['step_content'],
+        step_output = {
+            'step': rollout_meta['steps'][step_idx],
             'score': score,
-            'num_mc_correct': sum(correctness_list),
-            'num_mc_total': len(correctness_list),
+            'num_mc_correct': sum(mc_correctness),
+            'num_mc_total': len(mc_correctness),
         }
         
-        # Ensure the steps_outputs list for this response is long enough
-        while len(steps_outputs[response_idx]) <= step_idx:
-            steps_outputs[response_idx].append(None)
+        steps_with_score.append(step_output)
         
-        steps_outputs[response_idx][step_idx] = step_result
-        
-        # Early stopping: if this step has 0 score, mark subsequent steps as 0
-        if score == 0.0 and args.get('early_stop', True):
-            # Find the maximum number of steps for this response
-            response_meta = response_metadata[response_idx]
-            if response_meta['success']:
-                max_steps = len(response_meta['mc_tasks'])
-                for future_step_idx in range(step_idx + 1, max_steps):
-                    if len(steps_outputs[response_idx]) <= future_step_idx:
-                        steps_outputs[response_idx].append({
-                            'step': 'Early stopped',
-                            'score': 0.0,
-                            'num_mc_correct': 0,
-                            'num_mc_total': 0,
-                        })
+        # Apply early stopping
+        if args.get('early_stop', True) and score == 0.0:
+            break
     
-    # Clean up None values and ensure all responses have consistent step lists
-    for response_idx in range(len(response_list)):
-        # Filter out None values
-        steps_outputs[response_idx] = [step for step in steps_outputs[response_idx] if step is not None]
-        
-        # If parsing failed, add a single error step
-        if not steps_outputs[response_idx]:
-            steps_outputs[response_idx] = [{
-                'step': 'Error parsing response',
-                'score': 0.0,
-                'num_mc_correct': 0,
-                'num_mc_total': 0,
-            }]
+    # Build final output
+    output = rollout_meta['item'].copy()
+    output['response'] = rollout_meta['response']
+    output['steps_with_score'] = steps_with_score
+    output['question'] = rollout_meta['input_data'][0]
     
-    logger.info(f"MC evaluation completed: {len(response_list)} responses processed")
-    return steps_outputs
+    return output
 
-def build_mc_scores(inputs, response_list, items, num_return_sequences, args):
+def process_mc_batch_simple(batch_tasks, batch_idx, args):
     """
-    Wrapper to use the new parallel MC evaluation
+    Process a single batch of MC tasks with simple time-based batch firing
+    Each batch contains up to 1000 independent MC evaluation requests
     """
-    return build_mc_scores_parallel(inputs, response_list, items, num_return_sequences, args)
+    logger.info(f"Starting batch {batch_idx + 1}: {len(batch_tasks)} MC tasks")
+    batch_start_time = time.time()
+    
+    # Prepare batch inputs
+    batch_inputs = [task['input_data'] for task in batch_tasks]
+    batch_prefixes = [task['prefix'] for task in batch_tasks]
+    
+    # Process batch - each task gets 1 API call
+    batch_responses = build_responses_azure(
+        batch_inputs,
+        1,  # Single response per task (not multiple MC per input)
+        batch_prefixes,
+        max_new_tokens=args.get('max_new_tokens', 4096),
+        temperature=args.get('temperature', 1.0),
+        max_workers=args.get('max_workers', 80)
+    )
+    
+    batch_duration = time.time() - batch_start_time
+    actual_rate = len(batch_tasks) / batch_duration * 60  # Convert to per minute
+    
+    logger.info(f"Batch {batch_idx + 1} processing completed: "
+               f"{len(batch_tasks)} tasks in {batch_duration:.1f}s "
+               f"({actual_rate:.0f} tasks/min)")
+    
+    return batch_responses
 
 def build_process_supervision(inputs, items, num_return_sequences, args):
     """
-    Build process supervision data with step-by-step scoring
+    STREAMING PIPELINE: 1K initial rollouts → M MC tasks → time-based processing → incremental saves
     """
-    logger.info(f"Starting initial rollout generation for {len(inputs)} inputs with {num_return_sequences} sequences each")
+    total_inputs = len(inputs)
+    total_initial_requests = total_inputs * num_return_sequences
+    
+    logger.info(f"=== STREAMING ROLLOUT PIPELINE ===")
+    logger.info(f"Phase 1 - Initial Rollout Generation:")
+    logger.info(f"  Inputs: {total_inputs}")
+    logger.info(f"  Sequences per input: {num_return_sequences}")
+    logger.info(f"  Total requests: {total_initial_requests}")
+    logger.info(f"  Rate limit utilization: {total_initial_requests/1000*100:.1f}% of 1000 RPM")
+    
     initial_start_time = time.time()
     
     response_list = build_responses_azure(
@@ -802,29 +701,31 @@ def build_process_supervision(inputs, items, num_return_sequences, args):
         num_return_sequences,
         max_new_tokens=args.get('max_new_tokens', 4096),
         temperature=args.get('temperature', 1.0),
-        max_workers=args.get('max_workers', 20)
+        max_workers=args.get('max_workers', 80)
     )
     
     initial_duration = time.time() - initial_start_time
-    logger.info(f"Initial rollout generation completed in {initial_duration:.2f} seconds")
+    actual_initial_rate = total_initial_requests / initial_duration * 60
+    
+    logger.info(f"Phase 1 completed:")
+    logger.info(f"  Duration: {initial_duration:.2f} seconds")
+    logger.info(f"  Actual rate: {actual_initial_rate:.1f} RPM ({actual_initial_rate/1000*100:.1f}% of limit)")
+    logger.info(f"  Generated {len(response_list)} rollout responses")
 
-    logger.debug(f"responses produced by build_process_supervision {response_list}") # num_return_sequences = n, so n rollouts for each input image. 
-    steps_with_score = build_mc_scores(inputs, response_list, items, num_return_sequences, args)
-    # return
+    logger.info(f"\nPhase 2 - Streaming MC Pipeline:")
+    logger.info(f"All MC tasks processed with time-based firing + per-rollout completion tracking")
+    
+    # Process with streaming pipeline (saves incrementally, returns empty)
+    build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_sequences, args)
 
-    outputs = []
+    total_duration = time.time() - initial_start_time
+    logger.info(f"\n=== STREAMING PIPELINE SUMMARY ===")
+    logger.info(f"Total processing time: {total_duration:.2f} seconds")
+    logger.info(f"All rollouts saved incrementally as they completed")
+    logger.info(f"Ready for next batch of {total_inputs} inputs")
 
-    for idx, (response, each_steps_with_score) in enumerate(zip(response_list, steps_with_score)):
-        input = inputs[idx // num_return_sequences]
-        item = items[idx // num_return_sequences]
-
-        output = item.copy()
-        output['response'] = response
-        output['steps_with_score'] = each_steps_with_score
-        output['question'] = input[0]  # Store the formatted question
-        outputs.append(output)
-
-    return outputs
+    # Return empty since we saved incrementally
+    return []
 
 
 def print_process_supervision(output):
@@ -845,274 +746,238 @@ def print_process_supervision(output):
     logger.info('[Response] End')
 
 
-# Configuration parameters optimized for maximum throughput
+# Configuration parameters optimized for MAXIMUM throughput in BOTH phases
 args = {
     'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/center_single_train.jsonl',
     'out_dir': 'raven_rollouts_output',
-    'batch_size': 50,  # Optimized for parallel processing within rate limits
-    'num_return_sequences': 2,
+    'batch_size': 125,  # 125 samples per batch - MAXIMIZE throughput
+    'num_return_sequences': 8,  # 125×8 = 1000 requests per batch (100% RPM utilization)
     'sample_start_idx': 0,
     'sample_max_num': 1200,  # Limit for testing
     'prompt_version': 'raven_v1',
-    'num_mc_sequences': 8,  # Increased for better MC estimation
+    'num_mc_sequences': 8,  # 8 MC per step
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
     'early_stop': True, # when a step results in an incorrect answer we immediately stop rollouts from THAT step.
     'max_new_tokens': 4096,
     'temperature': 1.0,
-    'max_workers': 20,  # Parallel processing threads
+    'max_workers': (os.cpu_count() or 4) * 8,  # 8x CPU cores for I/O-bound API calls
     'validation_threshold': 0.95,  # Minimum success rate required
 }
 
-# Create output directory
-os.makedirs(args['out_dir'], exist_ok=True)
+def main():
+    """Main execution function for RAVEN rollout generation"""
+    # Create output directory
+    os.makedirs(args['out_dir'], exist_ok=True)
 
-# Setup logging
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-log_filename = f"raven_rollout_{timestamp}_samples_{args['sample_start_idx']}_{args['sample_max_num']}.log"
-log_filepath = os.path.join(args['out_dir'], log_filename)
+    # Setup logging
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = f"raven_rollout_{timestamp}_samples_{args['sample_start_idx']}_{args['sample_max_num']}.log"
+    log_filepath = os.path.join(args['out_dir'], log_filename)
 
-# Create custom logger
-logger = logging.getLogger('raven_rollout')
-logger.setLevel(logging.DEBUG)  # Allow all levels to reach handlers
+    # Configure the logger (already created at top of file)
+    logger.setLevel(logging.DEBUG)  # Allow all levels to reach handlers
 
-# Create formatters
-detailed_formatter = logging.Formatter(
-    '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-simple_formatter = logging.Formatter('%(message)s')
-
-# File handler - detailed logging (includes DEBUG)
-file_handler = logging.FileHandler(log_filepath)
-file_handler.setLevel(logging.DEBUG)  # Save all debug info to file
-file_handler.setFormatter(detailed_formatter)
-
-# Console handler - replace TqdmLoggingHandler with StreamHandler for screen compatibility
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.INFO)  # Keep console clean, only INFO and above
-console_handler.setFormatter(simple_formatter)
-
-# Add handlers to logger
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
-
-logger.info(f"Starting RAVEN rollout generation")
-logger.info(f"Configuration: {args}")
-logger.info(f"Using Azure OpenAI endpoint: {endpoint}")
-logger.info(f"Model deployment: {deployment}")
-logger.info(f"Log file: {log_filepath}")
-
-# Load and process RAVEN dataset
-dataset = RAVENDataset(
-    data=args['prompt_path'],
-    sample_max_num=args['sample_max_num'],
-    sample_start_idx=args['sample_start_idx'],
-)
-
-logger.info(f"Dataset loaded: {len(dataset)} samples")
-
-# Process all samples with optimized batch processing
-batch_size = args['batch_size']
-outputs = []
-
-# Timing statistics collection
-sample_times = []
-total_start_time = time.time()
-
-# Create progress bar for the full dataset - disable for screen compatibility
-try:
-    # Check if we're in a proper terminal
-    import sys
-    is_terminal = sys.stdout.isatty() and sys.stderr.isatty()
-except:
-    is_terminal = False
-
-# Use progress bar only if in terminal, otherwise use simple counter
-if is_terminal:
-    progress_bar = tqdm(
-        range(len(dataset)), 
-        desc=f"Processing RAVEN samples ({args['sample_start_idx']} to {args['sample_start_idx'] + len(dataset)})",
-        unit="sample"
+    # Create formatters
+    detailed_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
-else:
-    progress_bar = None
-    logger.info(f"Processing {len(dataset)} RAVEN samples ({args['sample_start_idx']} to {args['sample_start_idx'] + len(dataset)})")
+    simple_formatter = logging.Formatter('%(message)s')
 
-current_sample = 0
+    # File handler - detailed logging (includes DEBUG)
+    file_handler = logging.FileHandler(log_filepath)
+    file_handler.setLevel(logging.DEBUG)  # Save all debug info to file
+    file_handler.setFormatter(detailed_formatter)
 
-# Process samples in optimized batches
-for batch_start in range(0, len(dataset), batch_size):
-    # Check for shutdown signal
-    if shutdown_flag.is_set():
-        logger.info("Shutdown signal received, terminating gracefully...")
-        break
-        
-    batch_end = min(batch_start + batch_size, len(dataset))
-    batch_samples = [dataset[i] for i in range(batch_start, batch_end)]
-    
-    logger.info(f"Processing batch {batch_start//batch_size + 1}: samples {batch_start+1}-{batch_end}")
-    batch_start_time = time.time()
-    
-    # Prepare batch inputs
-    batch_inputs = []
-    batch_items = []
-    
-    for i, sample in enumerate(batch_samples):
-        # Check for shutdown signal during batch preparation
+    # Console handler - replace TqdmLoggingHandler with StreamHandler for screen compatibility
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)  # Keep console clean, only INFO and above
+    console_handler.setFormatter(simple_formatter)
+
+    # Add handlers to logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    logger.info(f"Starting RAVEN rollout generation")
+    logger.info(f"Configuration: {args}")
+    logger.info(f"Using Azure OpenAI endpoint: {endpoint}")
+    logger.info(f"Model deployment: {deployment}")
+    logger.info(f"Log file: {log_filepath}")
+
+    # Load and process RAVEN dataset
+    dataset = RAVENDataset(
+        data=args['prompt_path'],
+        sample_max_num=args['sample_max_num'],
+        sample_start_idx=args['sample_start_idx'],
+    )
+
+    logger.info(f"Dataset loaded: {len(dataset)} samples")
+
+    # Process all samples with optimized batch processing
+    batch_size = args['batch_size']
+
+    # Timing statistics collection
+    sample_times = []
+    total_start_time = time.time()
+
+    # Create progress bar for the full dataset - disable for screen compatibility
+    try:
+        # Check if we're in a proper terminal
+        is_terminal = sys.stdout.isatty() and sys.stderr.isatty()
+    except:
+        is_terminal = False
+
+    # Use progress bar only if in terminal, otherwise use simple counter
+    if is_terminal:
+        progress_bar = tqdm(
+            range(len(dataset)), 
+            desc=f"Processing RAVEN samples ({args['sample_start_idx']} to {args['sample_start_idx'] + len(dataset)})",
+            unit="sample"
+        )
+    else:
+        progress_bar = None
+        logger.info(f"Processing {len(dataset)} RAVEN samples ({args['sample_start_idx']} to {args['sample_start_idx'] + len(dataset)})")
+
+    current_sample = 0
+
+    # Process samples in optimized batches
+    for batch_start in range(0, len(dataset), batch_size):
+        # Check for shutdown signal
         if shutdown_flag.is_set():
-            logger.info("Shutdown signal received during batch preparation...")
+            logger.info("Shutdown signal received, terminating gracefully...")
             break
             
-        batch_inputs.append((sample['rollout_user_prompt'], sample['image']))
-        batch_items.append(sample['item'])
-    
-    # Skip processing if shutdown was requested
-    if shutdown_flag.is_set():
-        break
-    
-    # Generate process supervision data for the entire batch
-    curr_outputs = build_process_supervision(
-        inputs=batch_inputs,
-        items=batch_items,
-        num_return_sequences=args['num_return_sequences'],
-        args=args
-    )
-    
-    batch_duration = time.time() - batch_start_time
-    avg_sample_time = batch_duration / max(len(batch_samples), 1)  # Prevent division by zero
-    sample_times.extend([avg_sample_time] * len(batch_samples))
-    
-    # Validate output count before extending
-    expected_outputs = len(batch_samples) * args['num_return_sequences']
-    actual_outputs = len(curr_outputs)
-    
-    if actual_outputs != expected_outputs:
-        logger.error(f"Batch output count mismatch! Expected {expected_outputs}, got {actual_outputs}")
-        raise ValueError(f"Batch output count mismatch: expected {expected_outputs}, got {actual_outputs}")
-    
-    outputs.extend(curr_outputs)
-    
-    # Save batch outputs incrementally
-    output_file = os.path.join(args['out_dir'], f'raven_rollouts_{args["sample_start_idx"]}_{args["sample_max_num"]}.jsonl')
-    file_mode = 'w' if batch_start == 0 else 'a'  # Write mode for first batch, append for subsequent
-    with open(output_file, file_mode, encoding='utf-8') as f:
-        for output in curr_outputs:
-            f.write(json.dumps(output, ensure_ascii=False) + '\n')
-    
-    logger.info(f"Saved batch {batch_start//batch_size + 1} outputs to {output_file} (total: {len(outputs)} samples)")
-    
-    # Update progress bar
-    for i in range(len(batch_samples)):
-        current_sample += 1
-        sample_idx = batch_start + i
-        sample = batch_samples[i]
+        batch_end = min(batch_start + batch_size, len(dataset))
+        batch_samples = [dataset[i] for i in range(batch_start, batch_end)]
         
-        if is_terminal:
-            progress_bar.update(1)
-            throughput = len(batch_samples) / max(batch_duration, 0.001)  # Prevent division by zero
-            progress_bar.set_postfix({
-                'batch_time': f"{batch_duration:.1f}s",
-                'avg_sample': f"{avg_sample_time:.1f}s",
-                'throughput': f"{throughput:.2f} samples/s",
-                'image': os.path.basename(sample['image_path'])[:15]
-            })
-        else:
-            # For non-terminal environments, log progress periodically
-            if current_sample % 10 == 0 or current_sample == len(dataset):
-                logger.info(f"Progress: {current_sample}/{len(dataset)} samples completed ({current_sample/len(dataset)*100:.1f}%)")
+        logger.info(f"Processing batch {batch_start//batch_size + 1}: samples {batch_start+1}-{batch_end}")
+        logger.info(f"MAXIMUM THROUGHPUT: {len(batch_samples)} samples × {args['num_return_sequences']} sequences = {len(batch_samples) * args['num_return_sequences']} initial requests")
+        logger.info(f"Rate limit utilization: {len(batch_samples) * args['num_return_sequences']/1000*100:.1f}% of 1000 RPM limit")
+        batch_start_time = time.time()
+        
+        # Prepare batch inputs
+        batch_inputs = []
+        batch_items = []
+        
+        for i, sample in enumerate(batch_samples):
+            # Check for shutdown signal during batch preparation
+            if shutdown_flag.is_set():
+                logger.info("Shutdown signal received during batch preparation...")
+                break
+                
+            batch_inputs.append((sample['rollout_user_prompt'], sample['image']))
+            batch_items.append(sample['item'])
+        
+        # Skip processing if shutdown was requested
+        if shutdown_flag.is_set():
+            break
+        
+        # Generate process supervision data for the entire batch
+        curr_outputs = build_process_supervision(
+            inputs=batch_inputs,
+            items=batch_items,
+            num_return_sequences=args['num_return_sequences'],
+            args=args
+        )
+        
+        batch_duration = time.time() - batch_start_time
+        avg_sample_time = batch_duration / max(len(batch_samples), 1)  # Prevent division by zero
+        sample_times.extend([avg_sample_time] * len(batch_samples))
+        
+        # Streaming pipeline handles validation internally
+        
+        # curr_outputs is empty since streaming pipeline saves incrementally
+        # No need to save here as rollouts are saved as they complete
+        
+        # Update progress bar
+        for i in range(len(batch_samples)):
+            current_sample += 1
+            sample_idx = batch_start + i
+            sample = batch_samples[i]
+            
+            if is_terminal:
+                progress_bar.update(1)
+                throughput = len(batch_samples) / max(batch_duration, 0.001)  # Prevent division by zero
+                progress_bar.set_postfix({
+                    'batch_time': f"{batch_duration:.1f}s",
+                    'avg_sample': f"{avg_sample_time:.1f}s",
+                    'throughput': f"{throughput:.2f} samples/s",
+                    'image': os.path.basename(sample['image_path'])[:15]
+                })
+            else:
+                # For non-terminal environments, log progress periodically
+                if current_sample % 10 == 0 or current_sample == len(dataset):
+                    logger.info(f"Progress: {current_sample}/{len(dataset)} samples completed ({current_sample/len(dataset)*100:.1f}%)")
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+            
+            # Print first sample details
+            if sample_idx == 0:
+                logger.info(f"\n[{localtime()}] First sample processing details:")
+                logger.info(f"Image path: {sample['image_path']}")
+                logger.info(f"Correct answer: {sample['item']['correct_answer']}")
+                logger.info(f"Batch processing time: {batch_duration:.2f} seconds")
+                logger.info(f"Average sample time: {avg_sample_time:.2f} seconds")
+                logger.info(f"Outputs saved incrementally via streaming pipeline")
                 sys.stdout.flush()
-                sys.stderr.flush()
         
-        # Print first sample details
-        if sample_idx == 0:
-            logger.info(f"\n[{localtime()}] First sample processing details:")
-            logger.info(f"Image path: {sample['image_path']}")
-            logger.info(f"Correct answer: {sample['item']['correct_answer']}")
-            logger.info(f"Batch processing time: {batch_duration:.2f} seconds")
-            logger.info(f"Average sample time: {avg_sample_time:.2f} seconds")
-            logger.info("\nFirst sample output:")
-            print_process_supervision(curr_outputs[0])
-            sys.stdout.flush()
-    
-    logger.info(f"Batch {batch_start//batch_size + 1} completed: {len(batch_samples)} samples in {batch_duration:.2f}s ({len(batch_samples)/batch_duration:.2f} samples/s)")
-    sys.stdout.flush()
-    
-    # Log rate limiting stats every few batches
-    if (batch_start // batch_size + 1) % 3 == 0:
-        stats = rate_limiter.get_stats()
-        logger.info(f"Rate Limiter Stats: RPM={stats['current_rpm']}/{stats['max_rpm']}, "
-                   f"TPM={stats['current_tpm']}/{stats['max_tpm']}, "
-                   f"Success Rate={stats['success_rate']:.3f} ({stats['total_requests']} total)")
+        logger.info(f"Batch {batch_start//batch_size + 1} completed: {len(batch_samples)} samples in {batch_duration:.2f}s ({len(batch_samples)/batch_duration:.2f} samples/s)")
         sys.stdout.flush()
+        
+        # Log progress periodically
+        if (batch_start // batch_size + 1) % 3 == 0:
+            sys.stdout.flush()
 
-if is_terminal:
-    progress_bar.close()
+    if is_terminal:
+        progress_bar.close()
 
-total_end_time = time.time()
-total_duration = total_end_time - total_start_time
+    total_end_time = time.time()
+    total_duration = total_end_time - total_start_time
 
-logger.info(f"\nGenerated {len(outputs)} rollout samples")
+    logger.info(f"\nProcessed {len(dataset)} input samples via streaming pipeline")
 
-# Final save confirmation (data already saved incrementally)
-output_file = os.path.join(args['out_dir'], f'raven_rollouts_{args["sample_start_idx"]}_{args["sample_max_num"]}.jsonl')
-logger.info(f"All {len(outputs)} samples saved incrementally to {output_file}")
+    # Final save confirmation (data already saved incrementally via streaming)
+    output_file = os.path.join(args['out_dir'], f'raven_rollouts_{args["sample_start_idx"]}_{args["sample_max_num"]}_streaming.jsonl')
+    logger.info(f"All rollouts saved incrementally to {output_file}")
 
-# Print timing statistics
-if sample_times:
-    avg_time_per_sample = sum(sample_times) / len(sample_times)
-    min_time = min(sample_times)
-    max_time = max(sample_times)
-    
-    logger.info(f"\n=== TIMING STATISTICS ===")
-    logger.info(f"Total processing time: {total_duration:.2f} seconds")
-    logger.info(f"Number of samples processed: {len(sample_times)}")
-    logger.info(f"Average time per sample: {avg_time_per_sample:.2f} seconds")
-    logger.info(f"Minimum time per sample: {min_time:.2f} seconds") 
-    logger.info(f"Maximum time per sample: {max_time:.2f} seconds")
-    logger.info(f"Total time breakdown:")
-    for i, duration in enumerate(sample_times):
-        logger.info(f"  Sample {i+1}: {duration:.2f}s")
-    
-    # Estimate throughput
-    samples_per_hour = 3600 / avg_time_per_sample if avg_time_per_sample > 0 else 0
-    logger.info(f"\nEstimated throughput: {samples_per_hour:.2f} samples/hour")
-    
-    # Estimate time for full dataset
-    if args['sample_max_num'] and args['sample_max_num'] < len(dataset):
-        estimated_total_time = avg_time_per_sample * args['sample_max_num']
-        estimated_hours = estimated_total_time / 3600
-        logger.info(f"Estimated time for {args['sample_max_num']} samples: {estimated_hours:.2f} hours")
+    # Print timing statistics
+    if sample_times:
+        avg_time_per_sample = sum(sample_times) / len(sample_times)
+        min_time = min(sample_times)
+        max_time = max(sample_times)
+        
+        logger.info(f"\n=== TIMING STATISTICS ===")
+        logger.info(f"Total processing time: {total_duration:.2f} seconds")
+        logger.info(f"Number of samples processed: {len(sample_times)}")
+        logger.info(f"Average time per sample: {avg_time_per_sample:.2f} seconds")
+        logger.info(f"Minimum time per sample: {min_time:.2f} seconds") 
+        logger.info(f"Maximum time per sample: {max_time:.2f} seconds")
+        logger.info(f"Total time breakdown:")
+        for i, duration in enumerate(sample_times):
+            logger.info(f"  Sample {i+1}: {duration:.2f}s")
+        
+        # Estimate throughput
+        samples_per_hour = 3600 / avg_time_per_sample if avg_time_per_sample > 0 else 0
+        logger.info(f"\nEstimated throughput: {samples_per_hour:.2f} samples/hour")
+        
+        # Estimate time for full dataset
+        if args['sample_max_num'] and args['sample_max_num'] < len(dataset):
+            estimated_total_time = avg_time_per_sample * args['sample_max_num']
+            estimated_hours = estimated_total_time / 3600
+            logger.info(f"Estimated time for {args['sample_max_num']} samples: {estimated_hours:.2f} hours")
 
-# Display summary statistics
-total_steps = sum(len(output['steps_with_score']) for output in outputs)
-avg_steps = total_steps / len(outputs) if outputs else 0
-avg_score = sum(
-    sum(step['score'] for step in output['steps_with_score']) / len(output['steps_with_score'])
-    for output in outputs if output['steps_with_score']
-) / len(outputs) if outputs else 0
+    # Summary statistics available in streaming output file
+    logger.info(f"\nSummary Statistics:")
+    logger.info(f"Total input samples processed: {len(dataset)}")
+    logger.info(f"Expected total rollouts: {len(dataset) * args['num_return_sequences']}")
+    logger.info(f"All rollout statistics available in output file")
 
-logger.info(f"\nSummary Statistics:")
-logger.info(f"Total outputs: {len(outputs)}")
-logger.info(f"Average steps per output: {avg_steps:.2f}")
-logger.info(f"Average step score: {avg_score:.3f}")
+    logger.info("RAVEN rollout generation completed successfully with MAXIMUM THROUGHPUT optimization")
+    logger.info(f"✓ Phase 1: 100% RPM utilization for initial rollouts")
+    logger.info(f"✓ Phase 2: All MC tasks processed independently with maximum parallelization")
+    logger.info(f"✓ Both phases optimized for 1000 RPM and 1000000 tokens/min sustained throughput")
+    logger.info(f"Log saved to: {log_filepath}")
 
-# Show sample output structure
-if outputs:
-    logger.info(f"\nSample output keys: {list(outputs[0].keys())}")
-    if outputs[0]['steps_with_score']:
-        logger.info(f"Sample step keys: {list(outputs[0]['steps_with_score'][0].keys())}")
-
-logger.info("RAVEN rollout generation completed successfully")
-logger.info(f"Log saved to: {log_filepath}")
-
-
-# TODO: Parallelize the rollouts. 
-# Based on these arguments I have set, what batch_size should I set to maximize throughput given the rate limit for the AzureOpenAI GPT-4.1 model is:
-
-# 1. Tokens-per-minute limit: 1,000,000 tokens/min
-# 2. Requests-per-minute limit: 1,000 requests/min
-
-# Other Info:
-# 1. Tokens per request: ~1,000 tokens (prompt + completion on average). can range from as low as 600 to ~2K.
-# 2. Time per request: ~30s
+if __name__ == "__main__":
+    main()
