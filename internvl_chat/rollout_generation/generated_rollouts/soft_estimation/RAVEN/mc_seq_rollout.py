@@ -155,12 +155,9 @@ shutdown_flag = threading.Event()
 
 def signal_handler(signum, frame):
     """Handle termination signals gracefully"""
-    if 'logger' in globals():
-        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-    else:
-        print(f"Received signal {signum}, initiating graceful shutdown...")
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
     shutdown_flag.set()
-    # Don't call sys.exit() from signal handler in threaded environment
+    sys.exit(0)
 
 # Register signal handlers
 signal.signal(signal.SIGINT, signal_handler)
@@ -187,7 +184,7 @@ class RAVENDataset(torch.utils.data.Dataset):
         sample_max_num=None,
         sample_start_idx=0,
     ):
-        with open(data, 'r', encoding='utf-8') as file:
+        with open(data) as file:
             self.data = file.readlines()
 
         if sample_max_num is not None and len(self.data) > sample_max_num:
@@ -560,235 +557,191 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
     return response_list
 
 # Updated function call
-def build_responses_azure(inputs, num_return_sequences=1, prefixes=None, max_new_tokens=4096, temperature=1.0, max_workers=None):
-    """Wrapper for backward compatibility with explicit max_workers parameter"""
-    # Use provided max_workers or default to 20
-    if max_workers is None:
-        max_workers = args.get('max_workers', 20) if 'args' in globals() and args else 20
+def build_responses_azure(inputs, num_return_sequences=1, prefixes=None, max_new_tokens=4096, temperature=1.0):
+    """Wrapper for backward compatibility"""
+    # Get max_workers from global args if available
+    max_workers = args.get('max_workers', 20) if 'args' in globals() else 20
     return build_responses_azure_parallel(
         inputs, num_return_sequences, prefixes, max_new_tokens, temperature, max_workers
     )
 
-def evaluate_single_response_mc(response_idx, response, input_data, item, args):
-    """
-    Evaluate MC scores for all steps of a single response in parallel
-    """
-    try:
-        # Parse the response into steps
-        steps = parse_response_to_perception_and_reasoning_steps_and_correct_answer(
-            response, 
-            max_perception_steps=args.get('max_perception_steps', 12), 
-            max_reasoning_steps=args.get('max_reasoning_steps', 12)
-        )
-        
-        # Combine perception and reasoning steps
-        flat_steps = steps['perception_steps'] + steps['reasoning_steps']
-        perception_count = len(steps['perception_steps'])
-        
-        # Prepare all MC evaluation tasks for this response
-        mc_tasks = []
-        
-        for step_idx in range(len(flat_steps)):
-            # Build prefix up to current step
-            prefix_steps = flat_steps[:step_idx+1]
-            
-            # Format the prefix properly
-            formatted_prefix = ""
-            if step_idx < perception_count:
-                # We're still in perception steps
-                formatted_prefix += "[Perception]\n"
-                for i, step in enumerate(prefix_steps):
-                    formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
-            else:
-                # We're in reasoning steps
-                formatted_prefix += "[Perception]\n"
-                for i, step in enumerate(steps['perception_steps']):
-                    formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
-                formatted_prefix += "\n[Reasoning]\n"
-                reasoning_steps = prefix_steps[perception_count:]
-                for i, step in enumerate(reasoning_steps):
-                    formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
-            
-            # Create MC task
-            mc_tasks.append({
-                'step_idx': step_idx,
-                'input': input_data,
-                'prefix': formatted_prefix.strip(),
-                'answer_gt': item['correct_answer'],
-                'step_content': flat_steps[step_idx]
-            })
-        
-        return {
-            'response_idx': response_idx,
-            'mc_tasks': mc_tasks,
-            'success': True
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to parse response {response_idx}: {e}")
-        return {
-            'response_idx': response_idx,
-            'mc_tasks': [],
-            'success': False,
-            'error': str(e)
-        }
-
-def build_mc_scores_parallel(inputs, response_list, items, num_return_sequences, args):
-    """
-    Build Monte Carlo scores with full parallelization - no sequential dependencies
-    """
-    assert len(response_list) == len(inputs) * num_return_sequences
-    
-    logger.info(f"Starting parallel MC evaluation for {len(response_list)} responses")
-    
-    # Step 1: Parse all responses and prepare MC tasks
-    all_mc_tasks = []
-    response_metadata = []
-    
-    for idx, response in enumerate(response_list):
-        input_data = inputs[idx // num_return_sequences]
-        item = items[idx // num_return_sequences]
-        
-        result = evaluate_single_response_mc(idx, response, input_data, item, args)
-        response_metadata.append(result)
-        
-        if result['success']:
-            # Add response_idx to each task for tracking
-            for task in result['mc_tasks']:
-                task['response_idx'] = idx
-                all_mc_tasks.append(task)
-        else:
-            # Create dummy tasks for failed parsing
-            dummy_task = {
-                'response_idx': idx,
-                'step_idx': 0,
-                'input': input_data,
-                'prefix': '',
-                'answer_gt': item['correct_answer'],
-                'step_content': 'Error parsing'
-            }
-            all_mc_tasks.append(dummy_task)
-    
-    logger.info(f"Prepared {len(all_mc_tasks)} MC evaluation tasks")
-    
-    # Step 2: Execute all MC tasks in parallel
-    if len(all_mc_tasks) == 0:
-        logger.warning("No MC tasks to execute")
-        return [[] for _ in range(len(response_list))]
-    
-    # Group tasks for batch processing
-    mc_inputs = []
-    mc_prefixes = []
-    task_metadata = []
-    
-    for task in all_mc_tasks:
-        mc_inputs.append(task['input'])
-        mc_prefixes.append(task['prefix'])
-        task_metadata.append(task)
-    
-    logger.info(f"Starting massive parallel MC rollout: {len(mc_inputs)} inputs × {args.get('num_mc_sequences', 4)} sequences")
-    mc_start_time = time.time()
-    
-    # Execute all MC evaluations in one massive parallel batch
-    mc_response_list = build_responses_azure(
-        mc_inputs,
-        args.get('num_mc_sequences', 4),
-        mc_prefixes,
-        max_new_tokens=args.get('max_new_tokens', 4096),
-        temperature=args.get('temperature', 1.0),
-        max_workers=args.get('max_workers', 20)
-    )
-    
-    mc_duration = time.time() - mc_start_time
-    total_mc_calls = len(mc_inputs) * args.get('num_mc_sequences', 4)
-    logger.info(f"Massive parallel MC completed: {total_mc_calls} calls in {mc_duration:.2f}s ({total_mc_calls/mc_duration:.2f} calls/s)")
-    
-    # Step 3: Process results and calculate scores
-    logger.info("Processing MC results and calculating step scores...")
-    
-    # Initialize output structure
-    steps_outputs = [[] for _ in range(len(response_list))]
-    
-    # Process results for each task
-    mc_sequences = args.get('num_mc_sequences', 4)
-    
-    for task_idx, task in enumerate(task_metadata):
-        response_idx = task['response_idx']
-        step_idx = task['step_idx']
-        
-        # Extract MC responses for this task
-        start_idx = task_idx * mc_sequences
-        end_idx = start_idx + mc_sequences
-        task_mc_responses = mc_response_list[start_idx:end_idx]
-        
-        # Calculate correctness for each MC response
-        correctness_list = []
-        for mc_response in task_mc_responses:
-            try:
-                correctness = check_answer(
-                    answer_pred=parse_answer(mc_response, prompt_version=args.get('prompt_version', 'raven_v1'))[-1],
-                    answer_gt=str(task['answer_gt']),
-                    mode='raven_score'
-                )
-            except Exception as e:
-                logger.debug(f'MC correctness check failed: {e}')
-                correctness = 0
-            correctness_list.append(correctness)
-        
-        # Calculate step score
-        score = sum(correctness_list) / len(correctness_list) if correctness_list else 0.0
-        
-        # Store result
-        step_result = {
-            'step': task['step_content'],
-            'score': score,
-            'num_mc_correct': sum(correctness_list),
-            'num_mc_total': len(correctness_list),
-        }
-        
-        # Ensure the steps_outputs list for this response is long enough
-        while len(steps_outputs[response_idx]) <= step_idx:
-            steps_outputs[response_idx].append(None)
-        
-        steps_outputs[response_idx][step_idx] = step_result
-        
-        # Early stopping: if this step has 0 score, mark subsequent steps as 0
-        if score == 0.0 and args.get('early_stop', True):
-            # Find the maximum number of steps for this response
-            response_meta = response_metadata[response_idx]
-            if response_meta['success']:
-                max_steps = len(response_meta['mc_tasks'])
-                for future_step_idx in range(step_idx + 1, max_steps):
-                    if len(steps_outputs[response_idx]) <= future_step_idx:
-                        steps_outputs[response_idx].append({
-                            'step': 'Early stopped',
-                            'score': 0.0,
-                            'num_mc_correct': 0,
-                            'num_mc_total': 0,
-                        })
-    
-    # Clean up None values and ensure all responses have consistent step lists
-    for response_idx in range(len(response_list)):
-        # Filter out None values
-        steps_outputs[response_idx] = [step for step in steps_outputs[response_idx] if step is not None]
-        
-        # If parsing failed, add a single error step
-        if not steps_outputs[response_idx]:
-            steps_outputs[response_idx] = [{
-                'step': 'Error parsing response',
-                'score': 0.0,
-                'num_mc_correct': 0,
-                'num_mc_total': 0,
-            }]
-    
-    logger.info(f"MC evaluation completed: {len(response_list)} responses processed")
-    return steps_outputs
-
 def build_mc_scores(inputs, response_list, items, num_return_sequences, args):
     """
-    Wrapper to use the new parallel MC evaluation
+    Build Monte Carlo scores for each step in the responses
     """
-    return build_mc_scores_parallel(inputs, response_list, items, num_return_sequences, args)
+    assert len(response_list) == len(inputs) * num_return_sequences
+
+    steps_list = []
+    for response in response_list:
+        try:
+            steps = parse_response_to_perception_and_reasoning_steps_and_correct_answer(response, max_perception_steps=args.get('max_perception_steps', 12), max_reasoning_steps=args.get('max_reasoning_steps', 12))
+            steps_list.append(steps)
+        except Exception as e:
+            logger.error(f"Failed to parse response: {e}")
+            # Add dummy structure to maintain indexing
+            steps_list.append({'perception_steps': ['Error parsing'], 'reasoning_steps': ['Error parsing'], 'llm_answer': 'Error'})
+    
+    # Convert structured steps to flat lists for processing
+    flat_steps_list = []
+    for steps_dict in steps_list:
+        # Combine perception and reasoning steps into a single flat list
+        flat_steps = steps_dict['perception_steps'] + steps_dict['reasoning_steps']
+        flat_steps_list.append(flat_steps)
+    
+    steps_flag = [False for _ in range(len(response_list))]
+    steps_outputs = [[] for _ in range(len(response_list))]
+
+    step_cnt = 0
+    while True:
+        logger.info(f"=== STEP_CNT = {step_cnt} ===")
+        curr_inputs_idx = []
+        curr_inputs = []
+        curr_prefixes = []
+        curr_answer_gt = []
+        
+        for idx, (flat_steps, flag) in enumerate(zip(flat_steps_list, steps_flag)):
+            if step_cnt >= len(flat_steps):
+                continue
+
+            if flag:
+                steps_outputs[idx].append({
+                    'step': flat_steps[step_cnt],
+                    'score': 0.0,
+                    'num_mc_correct': 0,
+                    'num_mc_total': 0,
+                })
+                continue
+            
+            # With 2 inputs, num_return_sequences = 2: [input_A, input_B] 
+            # response_list: [resp_A1, resp_A2, resp_B1, resp_B2] (length 4)
+
+            # idx=0 → inputs[0 // 2] = inputs[0] = input_A ✓
+            # idx=1 → inputs[1 // 2] = inputs[0] = input_A ✓  
+            # idx=2 → inputs[2 // 2] = inputs[1] = input_B ✓
+            # idx=3 → inputs[3 // 2] = inputs[1] = input_B ✓
+            input = inputs[idx // num_return_sequences]
+            item = items[idx // num_return_sequences]
+
+            # only add to curr_inputs if this generated response needs MC evaluation
+            curr_inputs_idx.append(idx)
+            curr_inputs.append(input)
+            
+            # Build prefix: perception + reasoning up to current step
+            prefix_steps = flat_steps[:step_cnt+1]
+            
+            # Reconstruct the proper format for the prefix
+            perception_count = len(steps_list[idx]['perception_steps'])
+            if step_cnt < perception_count:
+                # We're still in perception steps
+                perception_prefix = prefix_steps
+                reasoning_prefix = []
+            else:
+                # We're in reasoning steps
+                perception_prefix = steps_list[idx]['perception_steps']
+                reasoning_prefix = prefix_steps[perception_count:]
+            
+            # Format the prefix properly
+            formatted_prefix = "" # add the Perception and/or reasoning step to analyse here
+            if perception_prefix:
+                formatted_prefix += "[Perception]\n"
+                for i, step in enumerate(perception_prefix):
+                    formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
+                formatted_prefix += "\n"
+            
+            if reasoning_prefix:
+                formatted_prefix += "[Reasoning]\n"
+                for i, step in enumerate(reasoning_prefix):
+                    formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
+            
+            curr_answer_gt.append(item['correct_answer'])
+            
+            logger.debug("--------------------------------")
+            logger.debug(f"added current formatted_prefix for this step_cnt {formatted_prefix}")
+            logger.debug("--------------------------------")
+            # why we append the formatted_prefix to another array (curr_prefixes) is so we separate this "processed input" from the input object (curr_inputs) which are the original inputs. 
+            # we use curr_prefixes to add to the assisstant message to "prefill" the assistant's response
+            curr_prefixes.append(formatted_prefix.strip())
+
+        # used for managing batch processing of inputs where sometimes there will be no curr_inputs to process, and we might need to add a zero score step.
+        if len(curr_inputs) <= 0:
+            for idx, flat_steps in enumerate(flat_steps_list):
+                for step_idx in range(len(flat_steps) - step_cnt - 1):
+                    steps_outputs[idx].append({
+                        'step': flat_steps[step_cnt + step_idx + 1],
+                        'score': 0.0,
+                        'num_mc_correct': 0,
+                        'num_mc_total': 0,
+                    })
+            break
+
+        # Here is where based on the current steps (prefixes), we rollout to get mc soft estimation. 
+        logger.info(f"Starting Monte Carlo rollouts for step_cnt {step_cnt} with {len(curr_inputs)} inputs")
+        mc_start_time = time.time()
+        
+        mc_response_list = build_responses_azure(
+            curr_inputs, 
+            args.get('num_mc_sequences', 16), 
+            curr_prefixes,
+            max_new_tokens=args.get('max_new_tokens', 4096),
+            temperature=args.get('temperature', 1.0)
+        )
+        
+        mc_duration = time.time() - mc_start_time
+        logger.info(f"Monte Carlo rollouts completed in {mc_duration:.2f} seconds for step_cnt {step_cnt}")
+
+        # Validation: Check expected vs actual MC responses
+        expected_mc_count = len(curr_inputs) * args.get('num_mc_sequences', 16)
+        actual_mc_count = len(mc_response_list)
+        successful_mc_count = len([r for r in mc_response_list if r.strip()])
+        
+        logger.info(f"MC Response validation: Expected={expected_mc_count}, Actual={actual_mc_count}, Successful={successful_mc_count}")
+        
+        if actual_mc_count != expected_mc_count:
+            logger.error(f"MC Response count mismatch! Expected {expected_mc_count}, got {actual_mc_count}")
+            raise ValueError(f"MC Response count mismatch: expected {expected_mc_count}, got {actual_mc_count}")
+        
+        success_rate = successful_mc_count / expected_mc_count
+        if success_rate < args.get('validation_threshold', 0.95):
+            logger.warning(f"Low MC success rate: {success_rate:.3f} ({successful_mc_count}/{expected_mc_count})")
+        
+        logger.debug(f"mc_response_list in build_mc_scores for step_cnt {step_cnt} has {len(mc_response_list)} responses")
+        logger.info(f"MC throughput: {len(mc_response_list) / mc_duration:.2f} responses/second")
+
+        # Here is where we get the correctness of the rollouts to label the corresponding rollout as correct or incorrect. 
+        correctness_list = []
+        for mc_idx, mc_response in enumerate(mc_response_list):
+            try:
+                # For RAVEN, we need to extract the final answer (number 1-8)
+                logger.debug(f"checking answer correctness for mc_response for this step_cnt {step_cnt} is {mc_response}")
+                correctness = check_answer(
+                    answer_pred=parse_answer(mc_response, prompt_version=args.get('prompt_version', 'raven_v1'))[-1], # parse based on answer format
+                    answer_gt=str(curr_answer_gt[mc_idx // args.get('num_mc_sequences', 16)]),
+                    mode='raven_score'  # Use RAVEN verification mode
+                )
+            except Exception as e:
+                logger.error(f'Fail to check correctness for response: {mc_response[:100]}... Error: {e}')
+                correctness = 0
+            correctness_list.append(correctness)
+        logger.info(f"correctness_list for this step_cnt {step_cnt} is {correctness_list}")
+
+        assert len(mc_response_list) == len(correctness_list)
+        assert len(mc_response_list) == len(curr_inputs) * args.get('num_mc_sequences', 16)
+
+        for idx_idx, idx in enumerate(curr_inputs_idx):
+            curr_correctness_list = correctness_list[idx_idx*args.get('num_mc_sequences', 16):(idx_idx+1)*args.get('num_mc_sequences', 16)]
+            score = sum(curr_correctness_list) / len(curr_correctness_list)
+            steps_outputs[idx].append({
+                'step': flat_steps_list[idx][step_cnt],
+                'score': score,
+                'num_mc_correct': sum(curr_correctness_list),
+                'num_mc_total': len(curr_correctness_list),
+            })
+
+            if score == 0 and args.get('early_stop', True):
+                steps_flag[idx] = True
+
+        step_cnt += 1
+    return steps_outputs
 
 def build_process_supervision(inputs, items, num_return_sequences, args):
     """
@@ -801,8 +754,7 @@ def build_process_supervision(inputs, items, num_return_sequences, args):
         inputs, # rollout_user_prompt, image
         num_return_sequences,
         max_new_tokens=args.get('max_new_tokens', 4096),
-        temperature=args.get('temperature', 1.0),
-        max_workers=args.get('max_workers', 20)
+        temperature=args.get('temperature', 1.0)
     )
     
     initial_duration = time.time() - initial_start_time
@@ -996,9 +948,9 @@ for batch_start in range(0, len(dataset), batch_size):
     # Save batch outputs incrementally
     output_file = os.path.join(args['out_dir'], f'raven_rollouts_{args["sample_start_idx"]}_{args["sample_max_num"]}.jsonl')
     file_mode = 'w' if batch_start == 0 else 'a'  # Write mode for first batch, append for subsequent
-    with open(output_file, file_mode, encoding='utf-8') as f:
+    with open(output_file, file_mode) as f:
         for output in curr_outputs:
-            f.write(json.dumps(output, ensure_ascii=False) + '\n')
+            f.write(json.dumps(output) + '\n')
     
     logger.info(f"Saved batch {batch_start//batch_size + 1} outputs to {output_file} (total: {len(outputs)} samples)")
     
