@@ -798,7 +798,7 @@ def print_process_supervision(output):
 args = {
     'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/center_single_train.jsonl',
     'out_dir': 'raven_rollouts_output',
-    'batch_size': 250,  # 125 samples per batch
+    'batch_size': 20,  # 125 samples per batch
     'num_return_sequences': 4,  # 250×4 = 1000 requests per batch (100% RPM utilization)
     'sample_start_idx': 0,
     'sample_max_num': 6000,
