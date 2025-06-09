@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbndd7fk-uksouth.cognitiveservices.azure.com/"
-deployment = "gpt-4.1-11"
+endpoint = "https://decla-mbndl4ye-norwayeast.cognitiveservices.azure.com/"
+deployment = "gpt-4.1-13"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -889,7 +889,7 @@ args = {
     'endpoint': endpoint,
     'deployment': deployment,
     'api_version': api_version,
-    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/distribute_four_validation.jsonl',
+    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/distribute_nine_validation.jsonl',
     'out_dir': 'raven_rollouts_output',
     'batch_size': 20,  # 125 samples per batch
     'num_return_sequences': 4,  # 20×4 = 80 requests per batch (conservative RPM utilization)
