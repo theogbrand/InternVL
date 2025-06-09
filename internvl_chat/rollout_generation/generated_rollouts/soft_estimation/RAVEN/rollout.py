@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbncunfi-australiaeast.cognitiveservices.azure.com/"
-deployment = "gpt-4.1"
+endpoint = "https://decla-mbnd5mha-japaneast.cognitiveservices.azure.com/"
+deployment = "gpt-4.1-9"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -582,7 +582,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     all_batches = [mc_task_queue[i:i+batch_size] for i in range(0, total_mc_tasks, batch_size)]
     
     # Output file for streaming saves
-    output_file = os.path.join(args['out_dir'], f'raven_rollouts_{args["sample_start_idx"]}_{args["sample_end_idx"]}_streaming.jsonl')
+    output_file = os.path.join(args['out_dir'], f'{args["dataset_name"]}_raven_rollouts_{args["sample_start_idx"]}_{args["sample_end_idx"]}_streaming.jsonl')
     completed_rollouts = 0
     
     logger.info(f"Starting time-based MC processing with streaming saves (500 RPM rate limit)")
@@ -889,12 +889,12 @@ args = {
     'endpoint': endpoint,
     'deployment': deployment,
     'api_version': api_version,
-    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/center_single_train.jsonl',
+    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/center_single_validation.jsonl',
     'out_dir': 'raven_rollouts_output',
     'batch_size': 20,  # 125 samples per batch
     'num_return_sequences': 4,  # 20×4 = 80 requests per batch (conservative RPM utilization)
-    'sample_start_idx': 8665,
-    'sample_end_idx': 9995,
+    'sample_start_idx': 5000,
+    'sample_end_idx': 9999,
     'prompt_version': 'raven_v1',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
@@ -906,6 +906,10 @@ args = {
     'debug_granular': True,  # Enable granular rollout-level debug logging
     'debug_max_rollouts': 1,  # Limit detailed logging to first N rollouts per batch to avoid log bloat
 }
+
+# Extract dataset name from prompt_path for unique file naming
+dataset_name = os.path.splitext(os.path.basename(args['prompt_path']))[0]
+args['dataset_name'] = dataset_name
 
 def main():
     """Main execution function for RAVEN rollout generation"""
@@ -1090,7 +1094,7 @@ def main():
     logger.info(f"\nProcessed {len(dataset)} input samples via streaming pipeline")
 
     # Final save confirmation (data already saved incrementally via streaming)
-    output_file = os.path.join(args['out_dir'], f'raven_rollouts_id_{args["sample_start_idx"]}_to_{args["sample_end_idx"]}_streaming.jsonl')
+    output_file = os.path.join(args['out_dir'], f'{args["dataset_name"]}_raven_rollouts_id_{args["sample_start_idx"]}_to_{args["sample_end_idx"]}_streaming.jsonl')
     logger.info(f"All rollouts saved incrementally to {output_file}")
 
     # Print timing statistics
