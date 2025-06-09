@@ -19,6 +19,8 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
+    retry_if_exception,
+    wait_random,
     before_sleep_log,
     after_log
 )
@@ -36,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://dalle-declare.openai.azure.com/"
-deployment = "gpt-4.1"
+endpoint = "https://declaregpt4.openai.azure.com/"
+deployment = "gpt-4.1-3"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -232,9 +234,11 @@ def parse_response_to_perception_and_reasoning_steps_and_correct_answer(text, ma
     return result
 
 @retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    retry=retry_if_exception_type((Exception,))
+    stop=stop_after_attempt(15),  # More attempts for rate limits
+    wait=wait_exponential(multiplier=2, min=4, max=300) + wait_random(0, 30),  # Longer backoff + jitter
+    retry=retry_if_exception_type((Exception,)),
+    before_sleep=lambda retry_state: logger.warning(f"API retry {retry_state.attempt_number}/15: {type(retry_state.outcome.exception()).__name__}, retrying in {retry_state.next_action.sleep:.1f}s"),
+    reraise=True
 )
 def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000):
     """Make Azure OpenAI request with retry logic"""
@@ -250,15 +254,75 @@ def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000)
         return response.choices[0].message.content
         
     except Exception as e:
-        raise
+        # Log detailed error information for monitoring
+        error_type = type(e).__name__
+        error_msg = str(e)
+        
+        # Extract rate limit details if available
+        if hasattr(e, 'response') and hasattr(e.response, 'headers'):
+            headers = e.response.headers
+            rate_limit_info = {
+                'remaining_requests': headers.get('x-ratelimit-remaining-requests'),
+                'remaining_tokens': headers.get('x-ratelimit-remaining-tokens'),
+                'reset_requests': headers.get('x-ratelimit-reset-requests'),
+                'reset_tokens': headers.get('x-ratelimit-reset-tokens')
+            }
+            logger.debug(f"Rate limit details: {rate_limit_info}")
+        
+        # Log first occurrence of error (tenacity will handle retry logging)
+        if 'RateLimitError' in error_type:
+            logger.debug(f"Rate limit hit: {error_msg} (estimated_tokens: {estimated_tokens})")
+            # For rate limits, always retry - they're transient
+            raise
+        elif 'TimeoutError' in error_type or 'timeout' in error_msg.lower():
+            logger.debug(f"Request timeout: {error_msg}")
+            raise
+        else:
+            logger.debug(f"API request failed: {error_type}: {error_msg}")
+            # For non-rate-limit errors, still retry but they might be permanent
+            raise
 
 def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None, max_new_tokens=4096, temperature=1.0, max_workers=20, args=None):
     """
-    Build responses using Azure OpenAI GPT-4.1 with parallel processing
+    Build responses using Azure OpenAI GPT-4.1 with parallel processing and simple task-level retry
     """
     total_requests = len(inputs) * num_return_sequences
     logger.info(f"Starting parallel processing of {total_requests} requests with {max_workers} workers")
     
+    def should_retry_task(exception):
+        """Decide if task-level retry should happen based on exception type"""
+        error_type = type(exception).__name__
+        error_msg = str(exception)
+        
+        # Log the exception details before deciding whether to retry
+        logger.debug(f"Task-level exception caught: {error_type}: {error_msg}")
+        
+        # Always retry rate limits at task level too for extra safety
+        if 'RateLimitError' in error_type or 'rate' in error_msg.lower():
+            logger.debug("Decision: RETRY (rate limit)")
+            return True
+        # Retry timeouts
+        if 'TimeoutError' in error_type or 'timeout' in error_msg.lower():
+            logger.debug("Decision: RETRY (timeout)")
+            return True
+        # Retry network issues
+        if 'ConnectionError' in error_type or 'connection' in error_msg.lower():
+            logger.debug("Decision: RETRY (connection issue)")
+            return True
+        # Don't retry authentication or permission errors
+        if 'AuthenticationError' in error_type or 'PermissionError' in error_type:
+            logger.debug("Decision: NO RETRY (auth/permission error)")
+            return False
+        # Retry other exceptions (could be transient)
+        logger.debug("Decision: RETRY (unknown exception, assuming transient)")
+        return True
+    
+    @retry(
+        stop=stop_after_attempt(5),  # More task-level attempts
+        wait=wait_exponential(multiplier=1, min=2, max=30) + wait_random(0, 10),
+        retry=retry_if_exception(should_retry_task),
+        before_sleep=lambda retry_state: logger.warning(f"Input {retry_state.kwargs['args_tuple'][0]}, Seq {retry_state.kwargs['args_tuple'][1]}: Task attempt {retry_state.attempt_number}/5 failed, retrying in {retry_state.next_action.sleep:.1f}s - {type(retry_state.outcome.exception()).__name__}")
+    )
     def process_single_request(args_tuple):
         input_idx, seq_idx, prompt, image, prefix, args_dict = args_tuple
         
@@ -302,7 +366,8 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
             return (input_idx, seq_idx, response_text)
             
         except Exception as e:
-            logger.error(f"Input {input_idx}, Seq {seq_idx}: Request failed - {e}")
+            # Log final failure and return empty string
+            logger.error(f"Input {input_idx}, Seq {seq_idx}: All retry attempts exhausted - {e}")
             return (input_idx, seq_idx, "")
     
     # Prepare all request arguments
@@ -548,18 +613,18 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"  Total rollouts: {total_rollouts}")
     logger.info(f"  Total MC tasks: {total_mc_tasks}")
     logger.info(f"  Average MC tasks per rollout: {avg_mc_per_rollout:.1f}")
-    logger.info(f"  Estimated batches: {math.ceil(total_mc_tasks/1000)}")
-    logger.info(f"  Estimated time: {math.ceil(total_mc_tasks/1000)*60:.0f} seconds")
+    logger.info(f"  Estimated batches: {math.ceil(total_mc_tasks/900)}")
+    logger.info(f"  Estimated time: {math.ceil(total_mc_tasks/900)*60:.0f} seconds")
     
     # Step 2: Process MC tasks with time-based firing + streaming completion tracking
-    batch_size = 1000
+    batch_size = 900  # Reduced from 1000 to 900 for less aggressive rate limiting
     all_batches = [mc_task_queue[i:i+batch_size] for i in range(0, total_mc_tasks, batch_size)]
     
     # Output file for streaming saves
     output_file = os.path.join(args['out_dir'], f'raven_rollouts_{args["sample_start_idx"]}_{args["sample_max_num"]}_streaming.jsonl')
     completed_rollouts = 0
     
-    logger.info(f"Starting time-based MC processing with streaming saves")
+    logger.info(f"Starting time-based MC processing with streaming saves (900 RPM rate limit)")
     start_time = time.time()
     
     # Open output file immediately for true streaming (append mode to preserve existing rollouts)
@@ -567,7 +632,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = []
             
-            # Fire batches every 60 seconds to maximize 1000 RPM throughput
+            # Fire batches every 60 seconds to maintain 900 RPM throughput
             for batch_idx, batch_tasks in enumerate(all_batches):
                 fire_time = start_time + batch_idx * 60.0
                 current_time = time.time()
@@ -668,7 +733,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"STREAMING MC Pipeline Completed:")
     logger.info(f"  Total MC tasks: {total_mc_tasks}")
     logger.info(f"  Completed rollouts: {completed_rollouts}/{total_rollouts}")
-    logger.info(f"  Duration: {total_duration:.0f}s ({actual_rate:.0f} tasks/min)")
+    logger.info(f"  Duration: {total_duration:.0f}s ({actual_rate:.0f} tasks/min, target: 900 RPM)")
     logger.info(f"  Saved to: {output_file}")
     
     # Return empty list since we saved incrementally
@@ -797,7 +862,7 @@ def build_process_supervision(inputs, items, num_return_sequences, args):
     logger.info(f"  Inputs: {total_inputs}")
     logger.info(f"  Sequences per input: {num_return_sequences}")
     logger.info(f"  Total requests: {total_initial_requests}")
-    logger.info(f"  Rate limit utilization: {total_initial_requests/1000*100:.1f}% of 1000 RPM")
+    logger.info(f"  Rate limit utilization: {total_initial_requests/900*100:.1f}% of 900 RPM")
     
     initial_start_time = time.time()
     
@@ -815,7 +880,7 @@ def build_process_supervision(inputs, items, num_return_sequences, args):
     
     logger.info(f"Phase 1 completed:")
     logger.info(f"  Duration: {initial_duration:.2f} seconds")
-    logger.info(f"  Actual rate: {actual_initial_rate:.1f} RPM ({actual_initial_rate/1000*100:.1f}% of limit)")
+    logger.info(f"  Actual rate: {actual_initial_rate:.1f} RPM ({actual_initial_rate/900*100:.1f}% of limit)")
     logger.info(f"  Generated {len(response_list)} rollout responses")
 
     logger.info(f"\nPhase 2 - Streaming MC Pipeline:")
@@ -860,9 +925,9 @@ args = {
     'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/center_single_train.jsonl',
     'out_dir': 'raven_rollouts_output',
     'batch_size': 20,  # 125 samples per batch
-    'num_return_sequences': 4,  # 250×4 = 1000 requests per batch (100% RPM utilization)
-    'sample_start_idx': 0,
-    'sample_max_num': 1000,
+    'num_return_sequences': 4,  # 20×4 = 80 requests per batch (conservative RPM utilization)
+    'sample_start_idx': 2000,
+    'sample_max_num': 3000,
     'prompt_version': 'raven_v1',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
@@ -964,8 +1029,8 @@ def main():
         batch_samples = [dataset[i] for i in range(batch_start, batch_end)]
         
         logger.info(f"Processing batch {batch_start//batch_size + 1}: samples {batch_start+1}-{batch_end}")
-        logger.info(f"MAXIMUM THROUGHPUT: {len(batch_samples)} samples × {args['num_return_sequences']} sequences = {len(batch_samples) * args['num_return_sequences']} initial requests")
-        logger.info(f"Rate limit utilization: {len(batch_samples) * args['num_return_sequences']/1000*100:.1f}% of 1000 RPM limit")
+        logger.info(f"OPTIMIZED THROUGHPUT: {len(batch_samples)} samples × {args['num_return_sequences']} sequences = {len(batch_samples) * args['num_return_sequences']} initial requests")
+        logger.info(f"Rate limit utilization: {len(batch_samples) * args['num_return_sequences']/900*100:.1f}% of 900 RPM limit")
         batch_start_time = time.time()
         
         # Prepare batch inputs
@@ -1093,10 +1158,10 @@ def main():
     logger.info(f"Expected total rollouts: {len(dataset) * args['num_return_sequences']}")
     logger.info(f"All rollout statistics available in output file")
 
-    logger.info("RAVEN rollout generation completed successfully with MAXIMUM THROUGHPUT optimization")
-    logger.info(f"✓ Phase 1: 100% RPM utilization for initial rollouts")
-    logger.info(f"✓ Phase 2: All MC tasks processed independently with maximum parallelization")
-    logger.info(f"✓ Both phases optimized for 1000 RPM and 1000000 tokens/min sustained throughput")
+    logger.info("RAVEN rollout generation completed successfully with OPTIMIZED THROUGHPUT")
+    logger.info(f"✓ Phase 1: Conservative RPM utilization for initial rollouts")
+    logger.info(f"✓ Phase 2: All MC tasks processed independently with optimized parallelization")
+    logger.info(f"✓ Both phases optimized for 900 RPM sustained throughput")
     logger.info(f"Log saved to: {log_filepath}")
 
 if __name__ == "__main__":
