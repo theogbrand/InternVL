@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://gpt4vdeclare.openai.azure.com/"
-deployment = "gpt-4.1-4"
+endpoint = "https://dalle-declare.openai.azure.com/"
+deployment = "gpt-4.1"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -834,10 +834,16 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
     output['steps_with_score'] = steps_with_score
     output['question'] = rollout_meta['input_data'][0]
     
+    # Add parsing_failed flag for failed rollouts (for retry capability)
+    if rollout_meta.get('steps') == ['Error parsing']:
+        output['parsing_failed'] = True
+    # Successfully parsed rollouts do NOT get this key at all
+    
     # Debug log final output for first few rollouts
     if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5):
         avg_score = sum(step['score'] for step in steps_with_score) / len(steps_with_score) if steps_with_score else 0.0
-        logger.debug(f"ROLLOUT {rollout_idx} FINAL: {len(steps_with_score)} steps, avg_score = {avg_score:.3f}")
+        parsing_status = "FAILED" if output.get('parsing_failed') else "SUCCESS"
+        logger.debug(f"ROLLOUT {rollout_idx} FINAL: {len(steps_with_score)} steps, avg_score = {avg_score:.3f}, parsing = {parsing_status}")
     
     return output
 
@@ -956,8 +962,8 @@ args = {
     'out_dir': 'raven_rollouts_output',
     'batch_size': 20,  # 125 samples per batch
     'num_return_sequences': 4,  # 20×4 = 80 requests per batch (conservative RPM utilization)
-    'sample_start_idx': 0,
-    'sample_end_idx': 1999,
+    'sample_start_idx': 2000,
+    'sample_end_idx': 3332,
     'prompt_version': 'raven_v1',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
