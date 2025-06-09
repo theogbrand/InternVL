@@ -796,6 +796,9 @@ def print_process_supervision(output):
 
 # Configuration parameters optimized for MAXIMUM throughput in BOTH phases
 args = {
+    'endpoint': endpoint,
+    'deployment': deployment,
+    'api_version': api_version,
     'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/center_single_train.jsonl',
     'out_dir': 'raven_rollouts_output',
     'batch_size': 20,  # 125 samples per batch
