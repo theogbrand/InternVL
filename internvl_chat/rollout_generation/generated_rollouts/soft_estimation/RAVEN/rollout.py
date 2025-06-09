@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://declaregpt4.openai.azure.com/"
-deployment = "gpt-4.1-3"
+endpoint = "https://gpt4vdeclare.openai.azure.com/"
+deployment = "gpt-4.1-4"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -84,17 +84,47 @@ class RAVENDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         data,
-        sample_max_num=None,
         sample_start_idx=0,
+        sample_end_idx=None,
     ):
+        self.data = []
+        total_lines = 0
+        
         with open(data, 'r', encoding='utf-8') as file:
-            self.data = file.readlines()
+            for line in file:
+                total_lines += 1
+                try:
+                    item = json.loads(line)
+                    item_id = item.get('id', -1)
+                    
+                    # Include if no filtering or ID is in range
+                    if sample_end_idx is None or (sample_start_idx <= item_id <= sample_end_idx):
+                        self.data.append(line)
+                        
+                except json.JSONDecodeError:
+                    continue
 
+        if sample_end_idx is not None:
+            print(f'Filtered {total_lines} lines to {len(self.data)} samples in ID range [{sample_start_idx}, {sample_end_idx}]')
+        else:
+            print(f'Loaded {len(self.data)} samples (no ID filtering)')
+
+    def apply_step_sampling(self, sample_max_num, sample_start_idx=0):
+        """
+        Apply step-wise sampling (old sample_max_num functionality).
+        
+        Args:
+            sample_max_num: Maximum number of samples to keep
+            sample_start_idx: Starting line position for sampling
+            
+        Returns:
+            None (modifies self.data in place)
+        """
         if sample_max_num is not None and len(self.data) > sample_max_num:
-            print(f'Truncate data lines. {len(self.data)} => {sample_max_num}')
+            print(f'Applying step sampling: {len(self.data)} => {sample_max_num}')
             step = max(len(self.data) // sample_max_num, 1)
             self.data = self.data[sample_start_idx::step][:sample_max_num]
-            print(f'Number of data lines after truncation: {len(self.data)=}')
+            print(f'Number of data lines after step sampling: {len(self.data)}')
 
     def __len__(self):
         return len(self.data)
@@ -597,7 +627,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
                 'total_mc_tasks': 1,
                 'completed_mc_tasks': 1,  # Mark as complete
                 'mc_results': {(0, 0): ""},
-                'is_complete': True
+                'is_complete': False  # Allow saving in completion logic
             }
             parsing_stats['failures'] += 1
     
@@ -617,14 +647,14 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"  Estimated time: {math.ceil(total_mc_tasks/900)*60:.0f} seconds")
     
     # Step 2: Process MC tasks with time-based firing + streaming completion tracking
-    batch_size = 900  # Reduced from 1000 to 900 for less aggressive rate limiting
+    batch_size = 500  # Reduced to 500 RPM for less aggressive rate limiting
     all_batches = [mc_task_queue[i:i+batch_size] for i in range(0, total_mc_tasks, batch_size)]
     
     # Output file for streaming saves
-    output_file = os.path.join(args['out_dir'], f'raven_rollouts_{args["sample_start_idx"]}_{args["sample_max_num"]}_streaming.jsonl')
+    output_file = os.path.join(args['out_dir'], f'raven_rollouts_{args["sample_start_idx"]}_{args["sample_end_idx"]}_streaming.jsonl')
     completed_rollouts = 0
     
-    logger.info(f"Starting time-based MC processing with streaming saves (900 RPM rate limit)")
+    logger.info(f"Starting time-based MC processing with streaming saves (500 RPM rate limit)")
     start_time = time.time()
     
     # Open output file immediately for true streaming (append mode to preserve existing rollouts)
@@ -632,7 +662,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = []
             
-            # Fire batches every 60 seconds to maintain 900 RPM throughput
+            # Fire batches every 60 seconds to maintain 500 RPM throughput
             for batch_idx, batch_tasks in enumerate(all_batches):
                 fire_time = start_time + batch_idx * 60.0
                 current_time = time.time()
@@ -733,7 +763,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"STREAMING MC Pipeline Completed:")
     logger.info(f"  Total MC tasks: {total_mc_tasks}")
     logger.info(f"  Completed rollouts: {completed_rollouts}/{total_rollouts}")
-    logger.info(f"  Duration: {total_duration:.0f}s ({actual_rate:.0f} tasks/min, target: 900 RPM)")
+    logger.info(f"  Duration: {total_duration:.0f}s ({actual_rate:.0f} tasks/min, target: 500 RPM)")
     logger.info(f"  Saved to: {output_file}")
     
     # Return empty list since we saved incrementally
@@ -862,7 +892,7 @@ def build_process_supervision(inputs, items, num_return_sequences, args):
     logger.info(f"  Inputs: {total_inputs}")
     logger.info(f"  Sequences per input: {num_return_sequences}")
     logger.info(f"  Total requests: {total_initial_requests}")
-    logger.info(f"  Rate limit utilization: {total_initial_requests/900*100:.1f}% of 900 RPM")
+    logger.info(f"  Rate limit utilization: {total_initial_requests/500*100:.1f}% of 500 RPM")
     
     initial_start_time = time.time()
     
@@ -880,7 +910,7 @@ def build_process_supervision(inputs, items, num_return_sequences, args):
     
     logger.info(f"Phase 1 completed:")
     logger.info(f"  Duration: {initial_duration:.2f} seconds")
-    logger.info(f"  Actual rate: {actual_initial_rate:.1f} RPM ({actual_initial_rate/900*100:.1f}% of limit)")
+    logger.info(f"  Actual rate: {actual_initial_rate:.1f} RPM ({actual_initial_rate/500*100:.1f}% of limit)")
     logger.info(f"  Generated {len(response_list)} rollout responses")
 
     logger.info(f"\nPhase 2 - Streaming MC Pipeline:")
@@ -926,8 +956,8 @@ args = {
     'out_dir': 'raven_rollouts_output',
     'batch_size': 20,  # 125 samples per batch
     'num_return_sequences': 4,  # 20×4 = 80 requests per batch (conservative RPM utilization)
-    'sample_start_idx': 2000,
-    'sample_max_num': 3000,
+    'sample_start_idx': 0,
+    'sample_end_idx': 1999,
     'prompt_version': 'raven_v1',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
@@ -947,7 +977,7 @@ def main():
 
     # Setup logging
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_filename = f"raven_rollout_{timestamp}_samples_{args['sample_start_idx']}_{args['sample_max_num']}.log"
+    log_filename = f"raven_rollout_{timestamp}_samples_{args['sample_start_idx']}_{args['sample_end_idx']}.log"
     log_filepath = os.path.join(args['out_dir'], log_filename)
 
     # Configure the logger (already created at top of file)
@@ -985,8 +1015,8 @@ def main():
     # Load and process RAVEN dataset
     dataset = RAVENDataset(
         data=args['prompt_path'],
-        sample_max_num=args['sample_max_num'],
         sample_start_idx=args['sample_start_idx'],
+        sample_end_idx=args['sample_end_idx'],
     )
 
     logger.info(f"Dataset loaded: {len(dataset)} samples")
@@ -1009,12 +1039,12 @@ def main():
     if is_terminal:
         progress_bar = tqdm(
             range(len(dataset)), 
-            desc=f"Processing RAVEN samples ({args['sample_start_idx']} to {args['sample_start_idx'] + len(dataset)})",
+            desc=f"Processing RAVEN samples (ID range {args['sample_start_idx']} to {args['sample_end_idx']})",
             unit="sample"
         )
     else:
         progress_bar = None
-        logger.info(f"Processing {len(dataset)} RAVEN samples ({args['sample_start_idx']} to {args['sample_start_idx'] + len(dataset)})")
+        logger.info(f"Processing {len(dataset)} RAVEN samples (ID range {args['sample_start_idx']} to {args['sample_end_idx']})")
 
     current_sample = 0
 
@@ -1030,7 +1060,7 @@ def main():
         
         logger.info(f"Processing batch {batch_start//batch_size + 1}: samples {batch_start+1}-{batch_end}")
         logger.info(f"OPTIMIZED THROUGHPUT: {len(batch_samples)} samples × {args['num_return_sequences']} sequences = {len(batch_samples) * args['num_return_sequences']} initial requests")
-        logger.info(f"Rate limit utilization: {len(batch_samples) * args['num_return_sequences']/900*100:.1f}% of 900 RPM limit")
+        logger.info(f"Rate limit utilization: {len(batch_samples) * args['num_return_sequences']/500*100:.1f}% of 500 RPM limit")
         batch_start_time = time.time()
         
         # Prepare batch inputs
@@ -1123,7 +1153,7 @@ def main():
     logger.info(f"\nProcessed {len(dataset)} input samples via streaming pipeline")
 
     # Final save confirmation (data already saved incrementally via streaming)
-    output_file = os.path.join(args['out_dir'], f'raven_rollouts_{args["sample_start_idx"]}_{args["sample_max_num"]}_streaming.jsonl')
+    output_file = os.path.join(args['out_dir'], f'raven_rollouts_id_{args["sample_start_idx"]}_to_{args["sample_end_idx"]}_streaming.jsonl')
     logger.info(f"All rollouts saved incrementally to {output_file}")
 
     # Print timing statistics
@@ -1147,10 +1177,10 @@ def main():
         logger.info(f"\nEstimated throughput: {samples_per_hour:.2f} samples/hour")
         
         # Estimate time for full dataset
-        if args['sample_max_num'] and args['sample_max_num'] < len(dataset):
-            estimated_total_time = avg_time_per_sample * args['sample_max_num']
+        if args['sample_end_idx'] and args['sample_end_idx'] < len(dataset):
+            estimated_total_time = avg_time_per_sample * (args['sample_end_idx'] - args['sample_start_idx'])
             estimated_hours = estimated_total_time / 3600
-            logger.info(f"Estimated time for {args['sample_max_num']} samples: {estimated_hours:.2f} hours")
+            logger.info(f"Estimated time for {args['sample_end_idx'] - args['sample_start_idx']} samples: {estimated_hours:.2f} hours")
 
     # Summary statistics available in streaming output file
     logger.info(f"\nSummary Statistics:")
@@ -1161,7 +1191,7 @@ def main():
     logger.info("RAVEN rollout generation completed successfully with OPTIMIZED THROUGHPUT")
     logger.info(f"✓ Phase 1: Conservative RPM utilization for initial rollouts")
     logger.info(f"✓ Phase 2: All MC tasks processed independently with optimized parallelization")
-    logger.info(f"✓ Both phases optimized for 900 RPM sustained throughput")
+    logger.info(f"✓ Both phases optimized for 500 RPM sustained throughput")
     logger.info(f"Log saved to: {log_filepath}")
 
 if __name__ == "__main__":
