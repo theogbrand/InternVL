@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://dalle-declare.openai.azure.com/"
-deployment = "gpt-4.1"
+endpoint = "https://research.openai.azure.com/"
+deployment = "gpt-4.1-2"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -448,75 +448,6 @@ def build_responses_azure(inputs, num_return_sequences=1, prefixes=None, max_new
         inputs, num_return_sequences, prefixes, max_new_tokens, temperature, max_workers, args
     )
 
-def evaluate_single_response_mc(response_idx, response, input_data, item, args):
-    """
-    Evaluate MC scores for all steps of a single response in parallel
-    """
-    try:
-        # Parse the response into steps
-        steps = parse_response_to_perception_and_reasoning_steps_and_correct_answer(
-            response, 
-            max_perception_steps=args.get('max_perception_steps', 12), 
-            max_reasoning_steps=args.get('max_reasoning_steps', 12)
-        )
-        
-        # Combine perception and reasoning steps
-        flat_steps = steps['perception_steps'] + steps['reasoning_steps']
-        perception_count = len(steps['perception_steps'])
-        
-        # Prepare all MC evaluation tasks for this response
-        mc_tasks = []
-        
-        for step_idx in range(len(flat_steps)):
-            # Build prefix up to current step
-            prefix_steps = flat_steps[:step_idx+1]
-            
-            # Format the prefix properly
-            formatted_prefix = ""
-            if step_idx < perception_count:
-                # We're still in perception steps
-                formatted_prefix += "[Perception]\n"
-                for i, step in enumerate(prefix_steps):
-                    formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
-            else:
-                # We're in reasoning steps
-                formatted_prefix += "[Perception]\n"
-                for i, step in enumerate(steps['perception_steps']):
-                    formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
-                formatted_prefix += "\n[Reasoning]\n"
-                reasoning_steps = prefix_steps[perception_count:]
-                for i, step in enumerate(reasoning_steps):
-                    formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
-            
-            # Create MC task
-            mc_tasks.append({
-                'step_idx': step_idx,
-                'input': input_data,
-                'prefix': formatted_prefix.strip(),
-                'answer_gt': item['correct_answer'],
-                'step_content': flat_steps[step_idx]
-            })
-        
-        return {
-            'response_idx': response_idx,
-            'mc_tasks': mc_tasks,
-            'success': True
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to parse response {response_idx}: {e}")
-        logger.error(f"Response text that failed to parse:")
-        logger.error("="*80)
-        logger.error(response)
-        logger.error("="*80)
-        return {
-            'response_idx': response_idx,
-            'mc_tasks': [],
-            'success': False,
-            'error': str(e)
-        }
-
-# Removed unused sequential method - only maximum throughput needed
 
 def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_sequences, args):
     """
@@ -962,8 +893,8 @@ args = {
     'out_dir': 'raven_rollouts_output',
     'batch_size': 20,  # 125 samples per batch
     'num_return_sequences': 4,  # 20×4 = 80 requests per batch (conservative RPM utilization)
-    'sample_start_idx': 2000,
-    'sample_end_idx': 3332,
+    'sample_start_idx': 3333,
+    'sample_end_idx': 4665,
     'prompt_version': 'raven_v1',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
