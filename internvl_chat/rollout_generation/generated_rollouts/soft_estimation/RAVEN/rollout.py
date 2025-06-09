@@ -154,6 +154,8 @@ It is crucial that your solution contains these sections in the exact format des
             'image_path': image_path,
             'item': item.copy(),
             'correct_answer': correct_answer,
+            'id': item['id'],
+            'subset_split': item['subset_split'],
         }
 
 
@@ -250,7 +252,7 @@ def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000)
     except Exception as e:
         raise
 
-def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None, max_new_tokens=4096, temperature=1.0, max_workers=20):
+def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None, max_new_tokens=4096, temperature=1.0, max_workers=20, args=None):
     """
     Build responses using Azure OpenAI GPT-4.1 with parallel processing
     """
@@ -258,7 +260,7 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
     logger.info(f"Starting parallel processing of {total_requests} requests with {max_workers} workers")
     
     def process_single_request(args_tuple):
-        input_idx, seq_idx, prompt, image, prefix = args_tuple
+        input_idx, seq_idx, prompt, image, prefix, args_dict = args_tuple
         
         # Check for shutdown signal
         if shutdown_flag.is_set():
@@ -290,11 +292,17 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
             # Simplified token estimation
             estimated_tokens = len(prompt) // 4 + 1000 + max_new_tokens
             
+            # Make the request with retries built into make_azure_request
             response_text = make_azure_request(messages, max_new_tokens, temperature, estimated_tokens)
+            
+            # Log response details for debugging
+            if args_dict and args_dict.get('debug_granular', False) and input_idx < args_dict.get('debug_max_rollouts', 5):
+                logger.debug(f"RESPONSE INPUT_{input_idx}_SEQ_{seq_idx}:\n{'='*80}\n{response_text}\n{'='*80}")
             
             return (input_idx, seq_idx, response_text)
             
-        except Exception:
+        except Exception as e:
+            logger.error(f"Input {input_idx}, Seq {seq_idx}: Request failed - {e}")
             return (input_idx, seq_idx, "")
     
     # Prepare all request arguments
@@ -302,7 +310,7 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
     for seq_idx in range(num_return_sequences):
         for input_idx, (prompt, image) in enumerate(inputs):
             prefix = prefixes[input_idx] if prefixes else None
-            request_args.append((input_idx, seq_idx, prompt, image, prefix))
+            request_args.append((input_idx, seq_idx, prompt, image, prefix, args))
     
     # Process requests in parallel - streamlined
     results = {}
@@ -319,8 +327,9 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
             try:
                 input_idx, seq_idx, response = future.result(timeout=600)
                 results[(input_idx, seq_idx)] = response
-            except Exception:
+            except Exception as e:
                 args = future_to_args[future]
+                logger.error(f"Future failed for input {args[0]}, seq {args[1]}: {e}")
                 results[(args[0], args[1])] = ""
     
     # Reconstruct response list in correct order
@@ -330,16 +339,18 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
             response = results.get((input_idx, seq_idx), "")
             response_list.append(response)
     
+    successful_requests = sum(1 for r in response_list if r != "")
+    logger.info(f"Completed parallel processing: {successful_requests}/{len(response_list)} responses generated successfully")
     return response_list
 
 # Updated function call
-def build_responses_azure(inputs, num_return_sequences=1, prefixes=None, max_new_tokens=4096, temperature=1.0, max_workers=None):
+def build_responses_azure(inputs, num_return_sequences=1, prefixes=None, max_new_tokens=4096, temperature=1.0, max_workers=None, args=None):
     """Wrapper for backward compatibility with explicit max_workers parameter"""
     # Use provided max_workers or default to 20
     if max_workers is None:
-        max_workers = args.get('max_workers', 20)
+        max_workers = args.get('max_workers', 20) if args else 20
     return build_responses_azure_parallel(
-        inputs, num_return_sequences, prefixes, max_new_tokens, temperature, max_workers
+        inputs, num_return_sequences, prefixes, max_new_tokens, temperature, max_workers, args
     )
 
 def evaluate_single_response_mc(response_idx, response, input_data, item, args):
@@ -479,8 +490,14 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
                 
                 prefix = formatted_prefix.strip()
                 
+                # Debug log for first few rollouts
+                if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5):
+                    logger.debug(f"ROLLOUT {rollout_idx} STEP {step_idx}: Step content: {flat_steps[step_idx]}")
+                    logger.debug(f"ROLLOUT {rollout_idx} STEP {step_idx}: Prepared prefix {prefix}")
+                
                 # Create MC tasks for this step
                 for mc_idx in range(num_mc_per_step):
+                    task_id = f"R{rollout_idx}-S{step_idx}-MC{mc_idx}"
                     mc_task_queue.append({
                         'rollout_idx': rollout_idx,
                         'step_idx': step_idx,
@@ -488,8 +505,12 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
                         'input_data': input_data,
                         'prefix': prefix,
                         'answer_gt': item['correct_answer'],
-                        'task_id': f"R{rollout_idx}-S{step_idx}-MC{mc_idx}"
+                        'task_id': task_id
                     })
+                    
+                    # Debug log for first few MC tasks
+                    if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5) and mc_idx == 0:
+                        logger.debug(f"MC TASK {task_id}: GT Answer = {item['correct_answer']}")
             
             parsing_stats['success'] += 1
             if rollout_idx < 3:  # Log first few successfully parsed rollouts
@@ -579,6 +600,11 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
                         rollout_idx = task['rollout_idx']
                         step_idx = task['step_idx']
                         mc_idx = task['mc_idx']
+                        task_id = task['task_id']
+                        
+                        # Debug log MC response for first few rollouts
+                        if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5):
+                            logger.debug(f"MC RESPONSE {task_id}: {mc_response[:200]}..." if len(mc_response) > 200 else f"MC RESPONSE {task_id}: {mc_response}")
                         
                         # Store MC result
                         rollout_metadata[rollout_idx]['mc_results'][(step_idx, mc_idx)] = mc_response
@@ -653,9 +679,16 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
     steps_with_score = []
     num_mc_sequences = args.get('num_mc_sequences', 8)
     
+    # Debug log for first few rollouts
+    if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5):
+        logger.debug(f"BUILDING OUTPUT FOR ROLLOUT {rollout_idx}:")
+        logger.debug(f"  Total steps: {len(rollout_meta['steps'])}")
+        logger.debug(f"  GT Answer: {rollout_meta['item']['correct_answer']}")
+    
     for step_idx in range(len(rollout_meta['steps'])):
         # Collect MC results for this step
         mc_correctness = []
+        mc_details = []  # For debug logging
         
         for mc_idx in range(num_mc_sequences):
             mc_response = rollout_meta['mc_results'].get((step_idx, mc_idx), "")
@@ -668,13 +701,22 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
                     answer_gt=str(rollout_meta['item']['correct_answer']),
                     mode='raven_score'
                 )
-            except Exception:
+                mc_details.append(f"MC{mc_idx}: {answer_pred} -> {correctness}")
+            except Exception as e:
                 correctness = 0
+                mc_details.append(f"MC{mc_idx}: PARSE_ERROR -> 0")
+                if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5):
+                    logger.debug(f"ROLLOUT {rollout_idx} STEP {step_idx} MC{mc_idx}: Parse error - {e}")
             
             mc_correctness.append(correctness)
         
         # Calculate step score
         score = sum(mc_correctness) / len(mc_correctness) if mc_correctness else 0.0
+        
+        # Debug log for first few rollouts
+        if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5):
+            logger.debug(f"ROLLOUT {rollout_idx} STEP {step_idx}: Score = {score:.3f} ({sum(mc_correctness)}/{len(mc_correctness)})")
+            logger.debug(f"  MC Details: {' | '.join(mc_details)}")
         
         step_output = {
             'step': rollout_meta['steps'][step_idx],
@@ -687,6 +729,8 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
         
         # Apply early stopping
         if args.get('early_stop', True) and score == 0.0:
+            if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5):
+                logger.debug(f"ROLLOUT {rollout_idx}: Early stopping at step {step_idx} (score = 0.0)")
             break
     
     # Build final output
@@ -694,6 +738,11 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
     output['response'] = rollout_meta['response']
     output['steps_with_score'] = steps_with_score
     output['question'] = rollout_meta['input_data'][0]
+    
+    # Debug log final output for first few rollouts
+    if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5):
+        avg_score = sum(step['score'] for step in steps_with_score) / len(steps_with_score) if steps_with_score else 0.0
+        logger.debug(f"ROLLOUT {rollout_idx} FINAL: {len(steps_with_score)} steps, avg_score = {avg_score:.3f}")
     
     return output
 
@@ -704,6 +753,13 @@ def process_mc_batch_simple(batch_tasks, batch_idx, args):
     """
     logger.info(f"Starting batch {batch_idx + 1}: {len(batch_tasks)} MC tasks")
     batch_start_time = time.time()
+    
+    # Debug log for first few tasks in early batches
+    if args.get('debug_granular', False) and batch_idx < 2:
+        for i, task in enumerate(batch_tasks[:3]):  # Log first 3 tasks
+            logger.debug(f"BATCH {batch_idx + 1} TASK {i}: {task['task_id']}")
+            logger.debug(f"  Prefix length: {len(task['prefix'])}")
+            logger.debug(f"  GT Answer: {task['answer_gt']}")
     
     # Prepare batch inputs
     batch_inputs = [task['input_data'] for task in batch_tasks]
@@ -716,7 +772,8 @@ def process_mc_batch_simple(batch_tasks, batch_idx, args):
         batch_prefixes,
         max_new_tokens=args.get('max_new_tokens', 4096),
         temperature=args.get('temperature', 1.0),
-        max_workers=args.get('max_workers', 80)
+        max_workers=args.get('max_workers', 80),
+        args=args
     )
     
     batch_duration = time.time() - batch_start_time
@@ -749,7 +806,8 @@ def build_process_supervision(inputs, items, num_return_sequences, args):
         num_return_sequences,
         max_new_tokens=args.get('max_new_tokens', 4096),
         temperature=args.get('temperature', 1.0),
-        max_workers=args.get('max_workers', 80)
+        max_workers=args.get('max_workers', 80),
+        args=args
     )
     
     initial_duration = time.time() - initial_start_time
@@ -804,18 +862,17 @@ args = {
     'batch_size': 20,  # 125 samples per batch
     'num_return_sequences': 4,  # 250×4 = 1000 requests per batch (100% RPM utilization)
     'sample_start_idx': 0,
-    'sample_max_num': 6000,
+    'sample_max_num': 1000,
     'prompt_version': 'raven_v1',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
-    'early_stop': True, # when a step results in an incorrect answer we immediately stop rollouts from THAT step.
+    'early_stop': False, # when a step results in an incorrect answer we immediately stop rollouts from THAT step.
     'max_new_tokens': 4096,
     'temperature': 1.0,
     'max_workers': (os.cpu_count() or 4) * 8,  # 8x CPU cores for I/O-bound API calls
-    'validation_threshold': 0.95,  # Minimum success rate required
     'debug_granular': True,  # Enable granular rollout-level debug logging
-    'debug_max_rollouts': 5,  # Limit detailed logging to first N rollouts per batch to avoid log bloat
+    'debug_max_rollouts': 1,  # Limit detailed logging to first N rollouts per batch to avoid log bloat
 }
 
 def main():
@@ -845,7 +902,9 @@ def main():
 
     # Console handler - replace TqdmLoggingHandler with StreamHandler for screen compatibility
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)  # Keep console clean, only INFO and above
+    # Show debug messages on console if granular debugging is enabled
+    console_level = logging.DEBUG if args.get('debug_granular', False) else logging.INFO
+    console_handler.setLevel(console_level)
     console_handler.setFormatter(simple_formatter)
 
     # Add handlers to logger
@@ -976,6 +1035,14 @@ def main():
                 sys.stdout.flush()
         
         logger.info(f"Batch {batch_start//batch_size + 1} completed: {len(batch_samples)} samples in {batch_duration:.2f}s ({len(batch_samples)/batch_duration:.2f} samples/s)")
+        
+        # Debug summary for this batch if granular debugging is enabled
+        if args.get('debug_granular', False):
+            logger.debug(f"BATCH {batch_start//batch_size + 1} DEBUG SUMMARY:")
+            logger.debug(f"  Samples processed: {len(batch_samples)}")
+            logger.debug(f"  Expected rollouts: {len(batch_samples) * args['num_return_sequences']}")
+            logger.debug(f"  All rollouts saved via streaming pipeline")
+        
         sys.stdout.flush()
         
         # Log progress periodically
