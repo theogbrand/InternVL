@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Script to run batch_processor.py to process ALL batches in screen
-# Usage: AZURE_API_KEY='your-key' ./run_batch_processor.sh
+# Usage: AZURE_API_KEY='your-key' ./run_batch_processor.sh [screen_session_name]
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCREEN_SESSION="batch_processor"
+SCREEN_SESSION="${1:-batch_processor}"
 
 # Check API key
 if [[ -z "${AZURE_API_KEY}" ]]; then

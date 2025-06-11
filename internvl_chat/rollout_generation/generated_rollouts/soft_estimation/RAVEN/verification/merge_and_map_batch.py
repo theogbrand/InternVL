@@ -201,7 +201,7 @@ def count_total_lines(jsonl_file: str) -> int:
     return total_lines
 
 
-def calculate_batch_requirements(total_lines: int, avg_tokens_per_line: float, max_tokens_per_batch: int = 1_000_000_000) -> Dict[str, Any]:
+def calculate_batch_requirements(total_lines: int, avg_tokens_per_line: float, max_tokens_per_batch: int = 100_000_000) -> Dict[str, Any]:
     """Calculate batch requirements given total lines and token constraints."""
     
     print(f"\nCalculating batch requirements:")
@@ -393,7 +393,7 @@ def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_
 
 def main():
     # Configuration
-    input_folder = "/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/final_output"
+    input_folder = "/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/final_output/center_single"
     output_dir = "/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs"
     merged_file = os.path.join(output_dir, "merged_batch_output.jsonl")
     batch_output_dir = os.path.join(output_dir, "verification_batches")
@@ -427,10 +427,10 @@ def main():
     print("\n" + "="*50 + "\n")
     
     # Step 3: Calculate batch requirements from merged file
-    print("Step 3: Calculating batch requirements (1B token limit)...")
+    print("Step 3: Calculating batch requirements (100M token limit)...")
     try:
         total_lines = count_total_lines(merged_file)
-        batch_requirements = calculate_batch_requirements(total_lines, avg_tokens, max_tokens_per_batch=10_000_000)
+        batch_requirements = calculate_batch_requirements(total_lines, avg_tokens, max_tokens_per_batch=100_000_000)
         
         # Save batch requirements to file
         batch_info_file = os.path.join(output_dir, "batch_requirements.json")

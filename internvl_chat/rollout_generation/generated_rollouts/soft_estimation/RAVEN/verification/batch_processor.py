@@ -572,7 +572,7 @@ class BatchProcessor:
 def main(check_interval_minutes: int = 1):
     """Main entry point."""
     processor = BatchProcessor(
-        verification_batches_dir="verification_batches",
+        verification_batches_dir="verification_pipeline_outputs/verification_batches",
         max_retries=10,
         azure_endpoint="https://aisg-sj.openai.azure.com/",  # o4-mini endpoint
         api_key=os.getenv("AZURE_API_KEY")  # or provide directly
