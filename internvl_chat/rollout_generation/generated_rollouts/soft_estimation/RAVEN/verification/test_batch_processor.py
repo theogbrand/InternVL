@@ -75,11 +75,9 @@ def main():
         traceback.print_exc()
     
     finally:
-        # Clean up test directory
-        if test_dir.exists():
-            import shutil
-            shutil.rmtree(test_dir)
-            print(f"🧹 Cleaned up test directory")
+        # Keep test directory for inspection
+        print(f"📂 Test directory preserved for inspection: {test_dir}")
+        print(f"💡 You can find results and logs in: {test_dir}")
 
 if __name__ == "__main__":
     main() 

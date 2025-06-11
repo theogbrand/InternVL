@@ -2,26 +2,25 @@ import os
 import json
 import time
 import datetime
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
-from openai import AzureOpenAI, BadRequestError
+from openai import AzureOpenAI
 
 @dataclass
 class BatchJob:
     input_file: str
-    file_id: Optional[str] = None
-    batch_id: Optional[str] = None
-    status: str = "pending"  # pending, uploading, submitted, running, completed, failed
+    status: str = "pending"  # pending, processing, completed, failed
     created_at: Optional[int] = None
-    output_file_id: Optional[str] = None
-    error_file_id: Optional[str] = None
     retries: int = 0
 
 class BatchProcessor:
     def __init__(self, verification_batches_dir: str = "verification_batches", 
-                 max_concurrent_batches: int = 5, max_retries: int = 10,
-                 azure_endpoint: str = None, api_key: str = None):
+                 max_retries: int = 10, azure_endpoint: str = None, api_key: str = None):
+        # Set up logging
+        self._setup_logging()
+        
         # Use provided parameters or fall back to defaults/environment
         endpoint = azure_endpoint or "https://aisg-sj.openai.azure.com/"
         key = api_key or os.getenv("AZURE_API_KEY")
@@ -36,279 +35,157 @@ class BatchProcessor:
         )
         
         self.verification_batches_dir = Path(verification_batches_dir)
-        self.max_concurrent_batches = max_concurrent_batches
         self.max_retries = max_retries
         self.initial_delay = 5
         
         # Track all jobs
-        self.pending_jobs: List[BatchJob] = []
-        self.active_jobs: Dict[str, BatchJob] = {}  # batch_id -> BatchJob
         self.completed_jobs: List[BatchJob] = []
         self.failed_jobs: List[BatchJob] = []
         
+        # Log initialization
+        self.logger.info(f"BatchProcessor initialized:")
+        self.logger.info(f"  - Endpoint: {endpoint}")
+        self.logger.info(f"  - Batches directory: {self.verification_batches_dir}")
+        self.logger.info(f"  - Max retries: {max_retries}")
+        self.logger.info(f"  - Processing mode: Sequential")
+    
+    def _setup_logging(self):
+        """Set up logging for the batch processor."""
+        # Create logs directory if it doesn't exist
+        log_dir = Path("batch_logs")
+        log_dir.mkdir(exist_ok=True)
+        
+        # Generate log filename with timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = log_dir / f"batch_processor_{timestamp}.log"
+        
+        # Configure logging
+        self.logger = logging.getLogger(f"BatchProcessor_{timestamp}")
+        self.logger.setLevel(logging.INFO)
+        
+        # Create formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        # File handler
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(formatter)
+        
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(formatter)
+        
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
+        
+        print(f"📝 Logging to: {log_file}")
+        print(f"📝 Monitor progress with: tail -f {log_file}")
+        self.logger.info("="*60)
+        self.logger.info("BATCH PROCESSOR SESSION STARTED")
+        self.logger.info("="*60)
+        
     def discover_input_files(self) -> List[str]:
         """Discover all JSONL files in the verification_batches directory."""
+        self.logger.info(f"Discovering input files in: {self.verification_batches_dir}")
+        
         if not self.verification_batches_dir.exists():
-            raise FileNotFoundError(f"Directory {self.verification_batches_dir} not found")
+            error_msg = f"Directory {self.verification_batches_dir} not found"
+            self.logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
         
         jsonl_files = list(self.verification_batches_dir.glob("*.jsonl"))
         if not jsonl_files:
-            raise FileNotFoundError(f"No JSONL files found in {self.verification_batches_dir}")
+            error_msg = f"No JSONL files found in {self.verification_batches_dir}"
+            self.logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
+        
+        # Log each file found
+        self.logger.info(f"Found {len(jsonl_files)} JSONL files to process:")
+        for i, file in enumerate(sorted(jsonl_files), 1):
+            file_size = file.stat().st_size / (1024*1024)  # Size in MB
+            self.logger.info(f"  {i:2d}. {file.name} ({file_size:.1f} MB)")
         
         print(f"📁 Found {len(jsonl_files)} JSONL files to process")
-        return [str(f) for f in jsonl_files]
+        return [str(f) for f in sorted(jsonl_files)]
     
-    def upload_file_with_retry(self, job: BatchJob) -> bool:
-        """Upload file with retry logic for token limits."""
-        job.status = "uploading"
-        retries = 0
-        delay = self.initial_delay
-        
-        while retries < self.max_retries:
-            try:
-                print(f"📤 Uploading {job.input_file}...")
-                file_response = self.client.files.create(
-                    file=open(job.input_file, "rb"), 
-                    purpose="batch",
-                    extra_body={"expires_after": {"seconds": 1209600, "anchor": "created_at"}}
-                )
-                
-                job.file_id = file_response.id
-                print(f"✅ File uploaded successfully: {job.file_id}")
-                return True
-                
-            except BadRequestError as e:
-                error_message = str(e)
-                if 'token_limit_exceeded' in error_message:
-                    retries += 1
-                    if retries >= self.max_retries:
-                        print(f"❌ Upload failed after {self.max_retries} retries for {job.input_file}")
-                        job.status = "failed"
-                        return False
-                    
-                    print(f"⏳ Token limit exceeded during upload. Waiting {delay}s before retry {retries}/{self.max_retries}...")
-                    time.sleep(delay)
-                    delay *= 2
-                else:
-                    print(f"❌ Upload error for {job.input_file}: {error_message}")
-                    job.status = "failed"
-                    return False
-            except Exception as e:
-                print(f"❌ Unexpected upload error for {job.input_file}: {str(e)}")
-                job.status = "failed"
-                return False
-        
-        return False
-    
-    def create_batch_with_retry(self, job: BatchJob) -> bool:
-        """Create batch job with retry logic for token limits."""
-        if not job.file_id:
-            return False
-        
-        retries = 0
-        delay = self.initial_delay
-        
-        while retries < self.max_retries:
-            try:
-                print(f"🚀 Creating batch job for {job.input_file}...")
-                batch_response = self.client.batches.create(
-                    input_file_id=job.file_id,
-                    endpoint="/chat/completions",
-                    completion_window="24h",
-                    extra_body={"output_expires_after": {"seconds": 1209600, "anchor": "created_at"}}
-                )
-                
-                job.batch_id = batch_response.id
-                job.status = "submitted"
-                job.created_at = batch_response.created_at
-                
-                print(f"✅ Batch created successfully: {job.batch_id}")
-                return True
-                
-            except BadRequestError as e:
-                error_message = str(e)
-                if 'token_limit_exceeded' in error_message:
-                    retries += 1
-                    if retries >= self.max_retries:
-                        print(f"❌ Batch creation failed after {self.max_retries} retries for {job.input_file}")
-                        job.status = "failed"
-                        return False
-                    
-                    print(f"⏳ Token limit exceeded during batch creation. Waiting {delay}s before retry {retries}/{self.max_retries}...")
-                    time.sleep(delay)
-                    delay *= 2
-                else:
-                    print(f"❌ Batch creation error for {job.input_file}: {error_message}")
-                    job.status = "failed"
-                    return False
-            except Exception as e:
-                print(f"❌ Unexpected batch creation error for {job.input_file}: {str(e)}")
-                job.status = "failed"
-                return False
-        
-        return False
-    
-    def check_batch_status(self, job: BatchJob) -> str:
-        """Check the status of a batch job."""
-        if not job.batch_id:
-            return job.status
-        
-        try:
-            batch_response = self.client.batches.retrieve(job.batch_id)
-            job.status = batch_response.status
-            
-            if batch_response.status == "completed":
-                job.output_file_id = batch_response.output_file_id
-            elif batch_response.status == "failed":
-                job.error_file_id = batch_response.error_file_id
-                
-            return job.status
-            
-        except Exception as e:
-            print(f"❌ Error checking batch status for {job.batch_id}: {str(e)}")
-            return job.status
-    
-    def process_batch_results(self, job: BatchJob) -> bool:
-        """Process and save batch results."""
-        if job.status != "completed" or not job.output_file_id:
-            return False
-        
-        try:
-            # Generate output filename based on input filename
-            input_filename = Path(job.input_file).stem
-            output_filename = f"verification_results_{input_filename}.json"
-            
-            print(f"📄 Processing results for {job.input_file}...")
-            
-            file_response = self.client.files.content(job.output_file_id)
-            raw_responses = file_response.text.strip().split('\n')
-            
-            verification_results = []
-            error_sample_ids = []
-            
-            for raw_response in raw_responses:
-                json_response = json.loads(raw_response)
-                
-                # Check for error status codes
-                if json_response["response"]["status_code"] != 200:
-                    error_sample_ids.append(json_response["custom_id"])
-                    continue
-                
-                # Create verification entry
-                verification_entry = {
-                    "custom_id": json_response["custom_id"],
-                    "verification_response": json_response["response"]["body"]["choices"][0]["message"]["content"]
-                }
-                verification_results.append(verification_entry)
-            
-            # Save results
-            with open(output_filename, 'w') as f:
-                json.dump(verification_results, f, indent=2)
-            
-            print(f"✅ Saved {len(verification_results)} verification results to {output_filename}")
-            
-            if error_sample_ids:
-                print(f"⚠️  Error sample IDs with status_code != 200: {error_sample_ids}")
-            else:
-                print(f"✅ All samples processed successfully for {job.input_file}")
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error processing results for {job.input_file}: {str(e)}")
-            return False
+    def check_job_status(self, job: BatchJob) -> str:
+        """Check the status of a processing job."""
+        # For direct processing, status is managed by the processing method
+        return job.status
     
     def process_all_batches(self):
         """Main processing loop to handle all batch jobs."""
-        # Discover input files
+        start_time = datetime.datetime.now()
+        self.logger.info("="*60)
+        self.logger.info("STARTING BATCH PROCESSING SESSION")
+        self.logger.info("="*60)
+        
+        # Discover input files in directory
         input_files = self.discover_input_files()
         
-        # Create BatchJob objects
-        self.pending_jobs = [BatchJob(input_file=f) for f in input_files]
+        self.logger.info(f"Processing session started with {len(input_files)} batch jobs:")
+        for i, input_file in enumerate(input_files, 1):
+            self.logger.info(f"  {i:2d}. {Path(input_file).name}")
         
-        print(f"🎯 Starting processing of {len(self.pending_jobs)} batch jobs")
-        print(f"🔄 Max concurrent batches: {self.max_concurrent_batches}")
+        print(f"🎯 Starting sequential processing of {len(input_files)} batch jobs")
         
-        while self.pending_jobs or self.active_jobs:
-            # Start new jobs if we have capacity
-            while (len(self.active_jobs) < self.max_concurrent_batches and 
-                   self.pending_jobs):
-                
-                job = self.pending_jobs.pop(0)
-                
-                # Upload file
-                if self.upload_file_with_retry(job):
-                    # Create batch
-                    if self.create_batch_with_retry(job):
-                        self.active_jobs[job.batch_id] = job
-                        print(f"📊 Active jobs: {len(self.active_jobs)}, Pending: {len(self.pending_jobs)}")
-                    else:
-                        self.failed_jobs.append(job)
-                else:
-                    self.failed_jobs.append(job)
+        # Process each file sequentially
+        for i, input_file in enumerate(input_files, 1):
+            job = BatchJob(input_file=input_file)
+            filename = Path(input_file).name
             
-            # Check status of active jobs
-            completed_batch_ids = []
-            
-            for batch_id, job in self.active_jobs.items():
-                status = self.check_batch_status(job)
-                
-                if status == "completed":
-                    print(f"🎉 Batch completed: {job.input_file}")
-                    if self.process_batch_results(job):
-                        self.completed_jobs.append(job)
-                    else:
-                        self.failed_jobs.append(job)
-                    completed_batch_ids.append(batch_id)
-                    
-                elif status == "failed":
-                    print(f"💥 Batch failed: {job.input_file}")
-                    self.failed_jobs.append(job)
-                    completed_batch_ids.append(batch_id)
-                    
-                elif status in ["validating", "in_progress", "finalizing"]:
-                    # Still running, check periodically
-                    pass
-            
-            # Remove completed jobs from active list
-            for batch_id in completed_batch_ids:
-                del self.active_jobs[batch_id]
-            
-            # Print progress
-            if self.active_jobs:
-                print(f"⏳ {datetime.datetime.now().strftime('%H:%M:%S')} - "
-                      f"Active: {len(self.active_jobs)}, "
-                      f"Pending: {len(self.pending_jobs)}, "
-                      f"Completed: {len(self.completed_jobs)}, "
-                      f"Failed: {len(self.failed_jobs)}")
-            
-            # Wait before next check
-            if self.active_jobs or self.pending_jobs:
-                time.sleep(30)  # Check every 30 seconds
+            self.logger.info(f"Processing job {i}/{len(input_files)}: {filename}")
+            print(f"\n📄 Processing job {i}/{len(input_files)}: {filename}")
+
+
         
         # Final summary
+        end_time = datetime.datetime.now()
+        total_runtime = end_time - start_time
+        
+        self.logger.info("="*60)
+        self.logger.info("PROCESSING SESSION COMPLETE")
+        self.logger.info("="*60)
+        self.logger.info(f"Session runtime: {total_runtime}")
+        self.logger.info(f"Total files processed: {len(input_files)}")
+        self.logger.info(f"Completed jobs: {len(self.completed_jobs)}")
+        self.logger.info(f"Failed jobs: {len(self.failed_jobs)}")
+        
         print("\n" + "="*50)
         print("🏁 PROCESSING COMPLETE")
         print("="*50)
         print(f"✅ Completed: {len(self.completed_jobs)}")
         print(f"❌ Failed: {len(self.failed_jobs)}")
+        print(f"⏱️  Total runtime: {total_runtime}")
         
         if self.failed_jobs:
+            self.logger.error("Failed jobs:")
             print("\n💥 Failed jobs:")
             for job in self.failed_jobs:
-                print(f"  - {job.input_file} (status: {job.status})")
+                filename = Path(job.input_file).name
+                self.logger.error(f"  - {filename} (status: {job.status})")
+                print(f"  - {filename} (status: {job.status})")
         
         if self.completed_jobs:
+            self.logger.info("Successfully processed files:")
             print("\n🎉 Successfully processed files:")
             for job in self.completed_jobs:
-                print(f"  - {job.input_file}")
+                filename = Path(job.input_file).name
+                self.logger.info(f"  - {filename}")
+                print(f"  - {filename}")
+        
+        self.logger.info("="*60)
+        self.logger.info("SESSION LOG COMPLETE")
+        self.logger.info("="*60)
 
 def main():
     """Main entry point."""
-    # Example usage with multiple deployments
     processor = BatchProcessor(
         verification_batches_dir="verification_batches",
-        max_concurrent_batches=5,  # Adjust based on your API limits
         max_retries=10,
         azure_endpoint="https://aisg-sj.openai.azure.com/",  # o4-mini endpoint
         api_key=os.getenv("AZURE_API_KEY")  # or provide directly
@@ -321,54 +198,21 @@ def main():
     except Exception as e:
         print(f"❌ Fatal error: {str(e)}")
 
-def run_parallel_processors():
-    """Example of running multiple processors in parallel with different deployments."""
-    import threading
     
-    # Define your different deployments
-    deployments = [
-        {
-            "name": "o4-mini",
-            "endpoint": "https://aisg-sj.openai.azure.com/",
-            "api_key": os.getenv("AZURE_API_KEY_1")
-        },
-        # {
-        #     "name": "o3-mini", 
-        #     "endpoint": "https://decla-mbncunfi-australiaeast.cognitiveservices.azure.com/",
-        #     "api_key": os.getenv("AZURE_API_KEY_2")
-        # }
-        # Add more deployments as needed
-    ]
-    
-    def run_processor(deployment_config):
-        """Run a single processor for a deployment."""
-        try:
-            print(f"🚀 Starting processor for {deployment_config['name']}")
-            processor = BatchProcessor(
-                verification_batches_dir=f"verification_batches_{deployment_config['name']}",
-                max_concurrent_batches=3,  # Lower per processor to avoid limits
-                max_retries=10,
-                azure_endpoint=deployment_config['endpoint'],
-                api_key=deployment_config['api_key']
-            )
-            processor.process_all_batches()
-            print(f"✅ Processor for {deployment_config['name']} completed")
-        except Exception as e:
-            print(f"❌ Processor for {deployment_config['name']} failed: {str(e)}")
-    
-    # Start processors in parallel
-    threads = []
-    for deployment in deployments:
-        if deployment['api_key']:  # Only start if API key is available
-            thread = threading.Thread(target=run_processor, args=(deployment,))
-            threads.append(thread)
-            thread.start()
-    
-    # Wait for all to complete
-    for thread in threads:
-        thread.join()
-    
-    print("🏁 All parallel processors completed")
+def run_processor(deployment_config):
+    """Run a single processor for a deployment."""
+    try:
+        print(f"🚀 Starting processor for {deployment_config['name']}")
+        processor = BatchProcessor(
+            verification_batches_dir=f"verification_batches_{deployment_config['name']}",
+            max_retries=10,
+            azure_endpoint=deployment_config['endpoint'],
+            api_key=deployment_config['api_key']
+        )
+        processor.process_all_batches()
+        print(f"✅ Processor for {deployment_config['name']} completed")
+    except Exception as e:
+        print(f"❌ Processor for {deployment_config['name']} failed: {str(e)}")
 
 if __name__ == "__main__":
     main() 
