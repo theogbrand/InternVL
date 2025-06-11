@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
-from openai import AzureOpenAI
+from openai import AzureOpenAI, BadRequestError
 
 @dataclass
 class BatchJob:
@@ -14,6 +14,10 @@ class BatchJob:
     status: str = "pending"  # pending, processing, completed, failed
     created_at: Optional[int] = None
     retries: int = 0
+    file_id: Optional[str] = None
+    batch_id: Optional[str] = None
+    output_file_id: Optional[str] = None
+    error_file_id: Optional[str] = None
 
 class BatchProcessor:
     def __init__(self, verification_batches_dir: str = "verification_batches", 
@@ -112,9 +116,228 @@ class BatchProcessor:
         print(f"📁 Found {len(jsonl_files)} JSONL files to process")
         return [str(f) for f in sorted(jsonl_files)]
     
+    def upload_file(self, job: BatchJob) -> bool:
+        """Upload a JSONL file to Azure OpenAI for batch processing."""
+        try:
+            filename = Path(job.input_file).name
+            self.logger.info(f"Uploading file: {filename}")
+            print(f"📤 Uploading file: {filename}")
+            
+            with open(job.input_file, "rb") as f:
+                file_response = self.client.files.create(
+                    file=f,
+                    purpose="batch",
+                    extra_body={"expires_after": {"seconds": 1209600, "anchor": "created_at"}}  # 14 days
+                )
+            
+            job.file_id = file_response.id
+            job.status = "uploaded"
+            
+            self.logger.info(f"File uploaded successfully: {job.file_id}")
+            print(f"✅ File uploaded: {job.file_id}")
+            
+            # Log file expiration
+            if file_response.expires_at:
+                expiration = datetime.datetime.fromtimestamp(file_response.expires_at)
+                self.logger.info(f"File expires at: {expiration}")
+            
+            return True
+            
+        except Exception as e:
+            error_msg = f"Failed to upload file {filename}: {str(e)}"
+            self.logger.error(error_msg)
+            print(f"❌ {error_msg}")
+            job.status = "upload_failed"
+            return False
+    
+    def create_batch(self, job: BatchJob) -> bool:
+        """Create a batch job with the uploaded file."""
+        try:
+            filename = Path(job.input_file).name
+            self.logger.info(f"Creating batch for file: {filename}")
+            print(f"🚀 Creating batch for file: {filename}")
+            
+            retries = 0
+            delay = self.initial_delay
+            
+            while retries < self.max_retries:
+                try:
+                    batch_response = self.client.batches.create(
+                        input_file_id=job.file_id,
+                        endpoint="/chat/completions",
+                        completion_window="24h",
+                        extra_body={"output_expires_after": {"seconds": 1209600, "anchor": "created_at"}}  # 14 days
+                    )
+                    
+                    job.batch_id = batch_response.id
+                    job.status = "batch_created"
+                    job.created_at = batch_response.created_at
+                    
+                    self.logger.info(f"Batch created successfully: {job.batch_id}")
+                    print(f"✅ Batch created: {job.batch_id}")
+                    return True
+                    
+                except BadRequestError as e:
+                    error_message = str(e)
+                    
+                    if 'token_limit_exceeded' in error_message:
+                        retries += 1
+                        if retries >= self.max_retries:
+                            self.logger.error(f"Maximum retries ({self.max_retries}) reached for token limit")
+                            print(f"❌ Maximum retries ({self.max_retries}) reached. Giving up.")
+                            break
+                        
+                        self.logger.warning(f"Token limit exceeded. Waiting {delay} seconds before retry {retries}/{self.max_retries}")
+                        print(f"⏳ Token limit exceeded. Waiting {delay} seconds before retry {retries}/{self.max_retries}...")
+                        time.sleep(delay)
+                        delay *= 2  # Exponential backoff
+                    else:
+                        # Different error, raise immediately
+                        raise e
+            
+            job.status = "batch_creation_failed"
+            return False
+            
+        except Exception as e:
+            error_msg = f"Failed to create batch for {filename}: {str(e)}"
+            self.logger.error(error_msg)
+            print(f"❌ {error_msg}")
+            job.status = "batch_creation_failed"
+            return False
+    
+    def monitor_batch(self, job: BatchJob) -> bool:
+        """Monitor batch job until completion."""
+        try:
+            filename = Path(job.input_file).name
+            self.logger.info(f"Monitoring batch {job.batch_id} for file: {filename}")
+            print(f"⏳ Monitoring batch for file: {filename}")
+            
+            status = "validating"
+            while status not in ("completed", "failed", "canceled"):
+                time.sleep(60)  # Check every minute
+                
+                batch_response = self.client.batches.retrieve(job.batch_id)
+                status = batch_response.status
+                
+                self.logger.info(f"Batch {job.batch_id} status: {status}")
+                print(f"📊 Batch status: {status}")
+                
+                job.status = f"batch_{status}"
+            
+            if status == "completed":
+                job.output_file_id = batch_response.output_file_id
+                job.error_file_id = batch_response.error_file_id
+                job.status = "completed"
+                
+                self.logger.info(f"Batch completed successfully: {job.batch_id}")
+                print(f"✅ Batch completed successfully")
+                return True
+            else:
+                job.status = "failed"
+                if batch_response.errors:
+                    for error in batch_response.errors.data:
+                        self.logger.error(f"Batch error - Code: {error.code}, Message: {error.message}")
+                        print(f"❌ Batch error - Code: {error.code}, Message: {error.message}")
+                return False
+                
+        except Exception as e:
+            error_msg = f"Failed to monitor batch {job.batch_id}: {str(e)}"
+            self.logger.error(error_msg)
+            print(f"❌ {error_msg}")
+            job.status = "monitoring_failed"
+            return False
+    
+    def process_results(self, job: BatchJob) -> bool:
+        """Process and save batch results."""
+        try:
+            filename = Path(job.input_file).name
+            output_filename = Path(job.input_file).stem + "_verification_results.json"
+            output_path = self.verification_batches_dir / "verification_pipeline_outputs" / output_filename
+            
+            # Create output directory if it doesn't exist
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            self.logger.info(f"Processing results for file: {filename}")
+            print(f"📝 Processing results for file: {filename}")
+            
+            verification_results = []
+            error_sample_ids = []
+            
+            # Use output_file_id if available, otherwise error_file_id
+            file_id = job.output_file_id or job.error_file_id
+            
+            if file_id:
+                file_response = self.client.files.content(file_id)
+                raw_responses = file_response.text.strip().split('\n')
+                
+                for raw_response in raw_responses:
+                    json_response = json.loads(raw_response)
+                    
+                    # Check for error status codes
+                    if json_response["response"]["status_code"] != 200:
+                        error_sample_ids.append(json_response["custom_id"])
+                        continue
+                    
+                    # Create verification entry for successful responses
+                    verification_entry = {
+                        "custom_id": json_response["custom_id"],
+                        "verification_response": json_response["response"]["body"]["choices"][0]["message"]["content"]
+                    }
+                    
+                    verification_results.append(verification_entry)
+                
+                # Save verification results
+                with open(output_path, 'w') as f:
+                    json.dump(verification_results, f, indent=2)
+                
+                self.logger.info(f"Saved {len(verification_results)} verification results to {output_path}")
+                print(f"💾 Saved {len(verification_results)} verification results to {output_filename}")
+                
+                if error_sample_ids:
+                    self.logger.warning(f"Error sample IDs with status_code != 200: {error_sample_ids}")
+                    print(f"⚠️  {len(error_sample_ids)} samples had errors")
+                else:
+                    self.logger.info("All samples processed successfully with status_code 200")
+                    print("✅ All samples processed successfully")
+                
+                return True
+            else:
+                self.logger.error("No output or error file ID available")
+                print("❌ No output or error file ID available")
+                return False
+                
+        except Exception as e:
+            error_msg = f"Failed to process results for {filename}: {str(e)}"
+            self.logger.error(error_msg)
+            print(f"❌ {error_msg}")
+            return False
+    
+    def process_single_job(self, job: BatchJob) -> bool:
+        """Process a single batch job through the complete pipeline."""
+        filename = Path(job.input_file).name
+        
+        # Step 1: Upload file
+        if not self.upload_file(job):
+            return False
+        
+        # Step 2: Create batch
+        if not self.create_batch(job):
+            return False
+        
+        # Step 3: Monitor batch
+        if not self.monitor_batch(job):
+            return False
+        
+        # Step 4: Process results
+        if not self.process_results(job):
+            return False
+        
+        self.logger.info(f"Successfully completed all steps for: {filename}")
+        print(f"🎉 Successfully completed all steps for: {filename}")
+        return True
+
     def check_job_status(self, job: BatchJob) -> str:
         """Check the status of a processing job."""
-        # For direct processing, status is managed by the processing method
         return job.status
     
     def process_all_batches(self):
@@ -141,7 +364,11 @@ class BatchProcessor:
             self.logger.info(f"Processing job {i}/{len(input_files)}: {filename}")
             print(f"\n📄 Processing job {i}/{len(input_files)}: {filename}")
 
-
+            # Process the job through the complete pipeline
+            if self.process_single_job(job):
+                self.completed_jobs.append(job)
+            else:
+                self.failed_jobs.append(job)
         
         # Final summary
         end_time = datetime.datetime.now()

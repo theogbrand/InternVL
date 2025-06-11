@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import uuid
 import tiktoken
 import base64
 from pathlib import Path
@@ -292,7 +293,7 @@ def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_
                     # Get custom_id from original data structure
                     custom_id = input_data.get('id', f'request-{line_num}')
                     if 'subset_split' in input_data:
-                        custom_id = f"{custom_id}_{input_data['subset_split']}"
+                        custom_id = f"{custom_id}_{input_data['subset_split']}_{uuid.uuid4()}"
                     
                     # Convert image to base64
                     if not image_path or not os.path.exists(image_path):

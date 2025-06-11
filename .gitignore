@@ -1,3 +1,4 @@
+internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs/verification_batches/*
 internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/final_output/*
 internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/*
 internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/processed_raven_images/*
