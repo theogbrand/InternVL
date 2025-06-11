@@ -393,8 +393,9 @@ def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_
 
 def main():
     # Configuration
-    input_folder = "/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/final_output/center_single"
-    output_dir = "/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs"
+    split = "distribute_four"
+    input_folder = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/final_output/{split}"
+    output_dir = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs/{split}"
     merged_file = os.path.join(output_dir, "merged_batch_output.jsonl")
     batch_output_dir = os.path.join(output_dir, "verification_batches")
     sample_size = 1000
