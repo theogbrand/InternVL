@@ -7,6 +7,7 @@ import base64
 from pathlib import Path
 from typing import List, Dict, Any
 from mimetypes import guess_type
+from prompts import verification_prompt
 
 
 def merge_jsonl_files(input_folder: str, output_file: str) -> None:
@@ -67,18 +68,23 @@ def local_image_to_data_url(image_path):
 
 def extract_content_from_data(data: Dict[str, Any]) -> Dict[str, str]:
     """Extract text content from response key and image path from combined_image_path key."""
-    response = data.get('response', '')
-    image_path = data.get('combined_image_path', '')
+    response = data.get('response', '').strip()
+    question = data.get('question', '').strip()
+    image_path = data.get('combined_image_path', '').strip()
     
     try:
         if not isinstance(response, str) or not response.strip():
             raise ValueError("No text found in key 'response'")
-        text_content = response
+        if not isinstance(question, str) or not question.strip():
+            raise ValueError("No text found in key 'question'")
+        if not isinstance(image_path, str) or not image_path.strip():
+            raise ValueError("No image path found in key 'combined_image_path'")
     except ValueError as e:
         raise e
     
     return {
-        'text': text_content,
+        'response': response,
+        'question': question,
         'image_path': image_path
     }
 
@@ -127,10 +133,11 @@ def calculate_average_tokens(jsonl_file: str, sample_size: int = 1000) -> float:
             
             # Extract text content and image path
             content = extract_content_from_data(data)
-            text_content = content['text']
+            question = content['question']
+            solution = content['response']
             image_path = content['image_path']
             
-            total_content = text_content
+            total_content = question + solution
             
             # Convert image to base64 and add to content for token calculation
             if image_path and os.path.exists(image_path):
@@ -287,7 +294,8 @@ def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_
                 # Extract required data
                 try:
                     content = extract_content_from_data(input_data)
-                    text_content = content['text']
+                    question = content['question']
+                    solution = content['response']
                     image_path = content['image_path']
                     
                     # Get custom_id from original data structure
@@ -315,7 +323,7 @@ def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_
                                     "content": [
                                         {
                                             "type": "text",
-                                            "text": "answer the following question:"
+                                            "text": verification_prompt.replace("{{ABSTRACT_VISUAL_REASONING_PROBLEM}}", question).replace("{{SOLUTION}}", solution)
                                         },
                                         {
                                             "type": "image_url",

@@ -6,6 +6,7 @@ Tests the BatchProcessor by submitting the first 2 JSONL files from verification
 
 import os
 import sys
+import signal
 from pathlib import Path
 
 # Add the current directory to the path so we can import batch_processor
@@ -14,8 +15,25 @@ sys.path.insert(0, str(current_dir))
 
 from batch_processor import BatchProcessor
 
+# Global processor variable for cleanup access
+processor = None
+
+def cleanup_handler(signum, frame):
+    """Handle cleanup when script is interrupted."""
+    print(f"\n🛑 Received signal {signum}. Cleaning up...")
+    if processor:
+        processor.cancel_my_active_batches()
+    print("🧹 Cleanup completed")
+    sys.exit(0)
+
 def main():
     """Test the BatchProcessor with the first 2 JSONL files."""
+    global processor
+    
+    # Set up signal handlers for cleanup
+    signal.signal(signal.SIGINT, cleanup_handler)
+    signal.signal(signal.SIGTERM, cleanup_handler)
+    
     # Path to the verification batches directory
     batches_dir = current_dir / "verification_pipeline_outputs" / "verification_batches"
     
@@ -51,30 +69,39 @@ def main():
         # Initialize BatchProcessor with test directory
         processor = BatchProcessor(
             verification_batches_dir=str(test_dir),
-            max_concurrent_batches=2,  # Since we're only testing 2 files
             max_retries=5,
-            azure_endpoint="https://aisg-sj.openai.azure.com/",  # Use default endpoint
+            azure_endpoint="https://aisg-sj.openai.azure.com/",
             api_key=os.getenv("AZURE_API_KEY")
         )
         
         print(f"\n🚀 Starting batch processing test...")
         print(f"📂 Using test directory: {test_dir}")
-        print(f"🔧 Max concurrent batches: 2")
         print(f"🔄 Max retries: 5")
+        print(f"📋 Processing mode: Sequential (2 files)")
+        print(f"🛑 Press Ctrl+C to stop and cancel only this processor's active batches")
         
-        # Process the batches
-        processor.process_all_batches()
+        # Process the batches sequentially
+        processor.process_all_batches(check_interval_minutes=1)
         
         print(f"\n✅ Test completed successfully!")
         
     except KeyboardInterrupt:
         print(f"\n🛑 Test interrupted by user")
+        if processor:
+            processor.cancel_my_active_batches()
     except Exception as e:
         print(f"❌ Test failed with error: {str(e)}")
+        if processor:
+            processor.cancel_my_active_batches()
         import traceback
         traceback.print_exc()
     
     finally:
+        # Final cleanup
+        if processor:
+            print("🧹 Final cleanup - cancelling any remaining batches from this processor...")
+            processor.cancel_my_active_batches()
+        
         # Keep test directory for inspection
         print(f"📂 Test directory preserved for inspection: {test_dir}")
         print(f"💡 You can find results and logs in: {test_dir}")

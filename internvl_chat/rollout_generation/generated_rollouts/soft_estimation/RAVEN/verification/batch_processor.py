@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 from openai import AzureOpenAI, BadRequestError
+import uuid
 
 @dataclass
 class BatchJob:
@@ -42,12 +43,17 @@ class BatchProcessor:
         self.max_retries = max_retries
         self.initial_delay = 5
         
-        # Track all jobs
+        # Track all jobs for this processor instance only
         self.completed_jobs: List[BatchJob] = []
         self.failed_jobs: List[BatchJob] = []
+        self.my_active_jobs: List[BatchJob] = []  # Track only jobs submitted by THIS processor instance
+        
+        # Generate unique processor ID for safety
+        self.processor_id = str(uuid.uuid4())[:8]
         
         # Log initialization
         self.logger.info(f"BatchProcessor initialized:")
+        self.logger.info(f"  - Processor ID: {self.processor_id}")
         self.logger.info(f"  - Endpoint: {endpoint}")
         self.logger.info(f"  - Batches directory: {self.verification_batches_dir}")
         self.logger.info(f"  - Max retries: {max_retries}")
@@ -340,51 +346,162 @@ class BatchProcessor:
         """Check the status of a processing job."""
         return job.status
     
-    def process_all_batches(self):
-        """Main processing loop to handle all batch jobs."""
+    def submit_single_batch(self, input_file: str) -> BatchJob:
+        """Submit a single batch job."""
+        job = BatchJob(input_file=input_file)
+        filename = Path(input_file).name
+        
+        self.logger.info(f"Submitting batch job: {filename}")
+        print(f"📤 Submitting batch job: {filename}")
+        
+        # Step 1: Upload file
+        if not self.upload_file(job):
+            job.status = "upload_failed"
+            return job
+            
+        # Step 2: Create batch
+        if not self.create_batch(job):
+            job.status = "batch_creation_failed"
+            return job
+        
+        job.status = "in_progress"
+        self.my_active_jobs.append(job)  # Track as MY active job
+        self.logger.info(f"[{self.processor_id}] Successfully submitted batch: {job.batch_id}")
+        print(f"✅ Batch submitted: {job.batch_id}")
+        return job
+    
+    def check_batch_completion(self, job: BatchJob) -> bool:
+        """Check if a batch job is completed. Returns True if completed."""
+        try:
+            batch_response = self.client.batches.retrieve(job.batch_id)
+            status = batch_response.status
+            job.status = f"batch_{status}"
+            
+            filename = Path(job.input_file).name
+            
+            if status == "completed":
+                job.output_file_id = batch_response.output_file_id
+                job.error_file_id = batch_response.error_file_id
+                job.status = "completed"
+                
+                self.logger.info(f"Batch completed: {filename}")
+                print(f"✅ Batch completed: {filename}")
+                
+                # Process results immediately
+                if self.process_results(job):
+                    self.completed_jobs.append(job)
+                    if job in self.my_active_jobs:
+                        self.my_active_jobs.remove(job)  # Remove from my active jobs
+                    self.logger.info(f"Results processed successfully: {filename}")
+                    print(f"💾 Results processed: {filename}")
+                else:
+                    self.failed_jobs.append(job)
+                    if job in self.my_active_jobs:
+                        self.my_active_jobs.remove(job)  # Remove from my active jobs
+                    self.logger.error(f"Result processing failed: {filename}")
+                    print(f"❌ Result processing failed: {filename}")
+                
+                return True
+                
+            elif status in ("failed", "canceled"):
+                job.status = "failed"
+                if batch_response.errors:
+                    for error in batch_response.errors.data:
+                        self.logger.error(f"Batch {filename} error - Code: {error.code}, Message: {error.message}")
+                
+                self.failed_jobs.append(job)
+                if job in self.my_active_jobs:
+                    self.my_active_jobs.remove(job)  # Remove from my active jobs
+                self.logger.error(f"Batch failed: {filename}")
+                print(f"❌ Batch failed: {filename}")
+                return True
+                
+            else:
+                # Still in progress
+                self.logger.info(f"Batch {filename} status: {status}")
+                print(f"⏳ Batch {filename}: {status}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error checking batch {job.batch_id}: {str(e)}")
+            print(f"⚠️  Error checking batch: {str(e)}")
+            return False
+
+    def process_all_batches(self, check_interval_minutes: int = 1):
+        """Process batches one at a time: submit -> wait for completion -> submit next."""
         start_time = datetime.datetime.now()
         self.logger.info("="*60)
-        self.logger.info("STARTING BATCH PROCESSING SESSION")
+        self.logger.info("STARTING SEQUENTIAL BATCH PROCESSING")
         self.logger.info("="*60)
         
-        # Discover input files in directory
         input_files = self.discover_input_files()
+        total_files = len(input_files)
         
-        self.logger.info(f"Processing session started with {len(input_files)} batch jobs:")
+        self.logger.info(f"Found {total_files} files to process sequentially")
         for i, input_file in enumerate(input_files, 1):
             self.logger.info(f"  {i:2d}. {Path(input_file).name}")
         
-        print(f"🎯 Starting sequential processing of {len(input_files)} batch jobs")
+        print(f"🎯 Processing {total_files} batch jobs sequentially")
         
-        # Process each file sequentially
-        for i, input_file in enumerate(input_files, 1):
-            job = BatchJob(input_file=input_file)
-            filename = Path(input_file).name
+        try:
+            current_job = None
+            file_index = 0
+            check_interval = check_interval_minutes * 60  # Convert to seconds
             
-            self.logger.info(f"Processing job {i}/{len(input_files)}: {filename}")
-            print(f"\n📄 Processing job {i}/{len(input_files)}: {filename}")
-
-            # Process the job through the complete pipeline
-            if self.process_single_job(job):
-                self.completed_jobs.append(job)
-            else:
-                self.failed_jobs.append(job)
+            while file_index < total_files or current_job:
+                # If no current job and files remaining, submit next batch
+                if not current_job and file_index < total_files:
+                    input_file = input_files[file_index]
+                    filename = Path(input_file).name
+                    
+                    self.logger.info(f"Processing file {file_index + 1}/{total_files}: {filename}")
+                    print(f"\n📋 Processing file {file_index + 1}/{total_files}: {filename}")
+                    
+                    current_job = self.submit_single_batch(input_file)
+                    file_index += 1
+                    
+                    # If submission failed, move to next file
+                    if current_job.status in ["upload_failed", "batch_creation_failed"]:
+                        self.failed_jobs.append(current_job)
+                        current_job = None
+                        continue
+                
+                # If we have a current job, check if it's completed
+                if current_job:
+                    if self.check_batch_completion(current_job):
+                        # Job completed (successfully or failed), clear current job
+                        current_job = None
+                    else:
+                        # Job still in progress, wait before next check
+                        self.logger.info(f"Waiting {check_interval_minutes} minute(s) before next check...")
+                        print(f"⏱️  Waiting {check_interval_minutes} minute(s) before next check...")
+                        time.sleep(check_interval)
+            
+        except KeyboardInterrupt:
+            self.logger.warning(f"[{self.processor_id}] Processing interrupted by user")
+            print("\n🛑 Processing interrupted by user")
+            self.cancel_my_active_batches()  # Cancel only MY active batches on interrupt
+        except Exception as e:
+            self.logger.error(f"[{self.processor_id}] Fatal error during processing: {str(e)}")
+            print(f"❌ Fatal error: {str(e)}")
+            self.cancel_my_active_batches()  # Cancel only MY active batches on error
         
         # Final summary
         end_time = datetime.datetime.now()
         total_runtime = end_time - start_time
         
         self.logger.info("="*60)
-        self.logger.info("PROCESSING SESSION COMPLETE")
+        self.logger.info("SEQUENTIAL PROCESSING COMPLETE")
         self.logger.info("="*60)
         self.logger.info(f"Session runtime: {total_runtime}")
-        self.logger.info(f"Total files processed: {len(input_files)}")
-        self.logger.info(f"Completed jobs: {len(self.completed_jobs)}")
+        self.logger.info(f"Total files: {total_files}")
+        self.logger.info(f"Successfully completed: {len(self.completed_jobs)}")
         self.logger.info(f"Failed jobs: {len(self.failed_jobs)}")
         
         print("\n" + "="*50)
-        print("🏁 PROCESSING COMPLETE")
+        print("🏁 SEQUENTIAL PROCESSING COMPLETE")
         print("="*50)
+        print(f"📊 Total files: {total_files}")
         print(f"✅ Completed: {len(self.completed_jobs)}")
         print(f"❌ Failed: {len(self.failed_jobs)}")
         print(f"⏱️  Total runtime: {total_runtime}")
@@ -406,10 +523,53 @@ class BatchProcessor:
                 print(f"  - {filename}")
         
         self.logger.info("="*60)
-        self.logger.info("SESSION LOG COMPLETE")
+        self.logger.info("SEQUENTIAL PROCESSING LOG COMPLETE")
         self.logger.info("="*60)
 
-def main():
+    def cancel_my_active_batches(self) -> None:
+        """Cancel only the batch jobs submitted by THIS processor instance."""
+        if not self.my_active_jobs:
+            self.logger.info(f"[{self.processor_id}] No active batch jobs to cancel for this processor")
+            print("ℹ️  No active batch jobs to cancel for this processor")
+            return
+        
+        self.logger.info(f"[{self.processor_id}] Cancelling {len(self.my_active_jobs)} batch jobs submitted by this processor...")
+        print(f"🚫 Cancelling {len(self.my_active_jobs)} batch jobs submitted by this processor...")
+        
+        cancelled_count = 0
+        failed_cancel_count = 0
+        
+        for job in self.my_active_jobs[:]:  # Create a copy to avoid modification during iteration
+            if job.batch_id:
+                try:
+                    # Only cancel if this job was submitted by this processor instance
+                    self.client.batches.cancel(job.batch_id)
+                    job.status = "cancelled_by_user"
+                    self.failed_jobs.append(job)
+                    self.my_active_jobs.remove(job)
+                    cancelled_count += 1
+                    
+                    filename = Path(job.input_file).name
+                    self.logger.info(f"[{self.processor_id}] Cancelled batch: {job.batch_id} for file: {filename}")
+                    print(f"🚫 Cancelled batch for file: {filename}")
+                    
+                except Exception as e:
+                    failed_cancel_count += 1
+                    self.logger.error(f"[{self.processor_id}] Failed to cancel batch {job.batch_id}: {str(e)}")
+                    print(f"⚠️  Failed to cancel batch {job.batch_id}: {str(e)}")
+            else:
+                # Job doesn't have batch_id yet, just remove it
+                self.my_active_jobs.remove(job)
+                job.status = "cancelled_before_submission"
+        
+        self.logger.info(f"[{self.processor_id}] Cancellation summary: {cancelled_count} cancelled, {failed_cancel_count} failed")
+        print(f"✅ Batch cancellation complete: {cancelled_count} cancelled, {failed_cancel_count} failed")
+        
+        if cancelled_count > 0:
+            self.logger.info(f"[{self.processor_id}] Note: Only cancelled batches submitted by this processor instance")
+            print("ℹ️  Note: Only cancelled batches submitted by this processor instance")
+
+def main(check_interval_minutes: int = 1):
     """Main entry point."""
     processor = BatchProcessor(
         verification_batches_dir="verification_batches",
@@ -419,7 +579,7 @@ def main():
     )
     
     try:
-        processor.process_all_batches()
+        processor.process_all_batches(check_interval_minutes)
     except KeyboardInterrupt:
         print("\n🛑 Processing interrupted by user")
     except Exception as e:

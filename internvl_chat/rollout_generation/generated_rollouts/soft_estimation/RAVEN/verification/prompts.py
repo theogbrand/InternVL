@@ -1,6 +1,4 @@
-verification_prompt = r"""
-
-I will provide an abstract visual reasoning problem along with a solution. They will be formatted as follows: 
+verification_prompt = r"""I will provide an abstract visual reasoning problem along with a solution. They will be formatted as follows: 
 
 [Abstract Visual Reasoning Problem]
 
@@ -109,5 +107,4 @@ The following is the abstract visual reasoning problem and the solution for your
 {{SOLUTION}}
 </solution>
 
-Now proceed with the task.
-"""
+Now proceed with the task."""
