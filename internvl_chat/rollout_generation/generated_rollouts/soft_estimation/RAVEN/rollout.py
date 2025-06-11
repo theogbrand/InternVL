@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbnd12sy-westeurope.cognitiveservices.azure.com/"
-deployment = "gpt-4.1-23"
+endpoint = "https://dalle-declare.openai.azure.com/"
+deployment = "gpt-4.1"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
