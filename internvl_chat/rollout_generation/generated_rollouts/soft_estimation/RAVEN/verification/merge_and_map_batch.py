@@ -201,10 +201,10 @@ def calculate_batch_requirements(total_lines: int, avg_tokens_per_line: float, m
     if total_lines <= 0:
         raise ValueError(f"Total lines must be positive, got: {total_lines}")
     
-    # Calculate lines per batch using 90% of max tokens to maximize throughput while staying safe
-    effective_max_tokens = max_tokens_per_batch * 0.9
+    # Calculate lines per batch using 95% of max tokens to maximize throughput while staying safe
+    effective_max_tokens = max_tokens_per_batch * 0.95
     lines_per_batch = int(effective_max_tokens // avg_tokens_per_line)
-    print(f"Using 90% of max tokens ({effective_max_tokens:,.0f}) to maximize throughput")
+    print(f"Using 95% of max tokens ({effective_max_tokens:,.0f}) to maximize throughput")
     
     # Ensure at least 1 line per batch
     if lines_per_batch <= 0:
