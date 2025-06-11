@@ -11,7 +11,7 @@ from prompts import verification_prompt
 
 
 def merge_jsonl_files(input_folder: str, output_file: str) -> None:
-    """Merge all JSONL files in input_folder into a single output file."""
+    """Merge all JSONL files in input_folder into a single output file, adding unique UUID to each row."""
     # Resolve path robustly - handle both absolute and relative paths
     input_path = Path(input_folder).resolve()
     output_path = Path(output_file).resolve()
@@ -39,12 +39,19 @@ def merge_jsonl_files(input_folder: str, output_file: str) -> None:
             print(f"Processing {jsonl_file.name}...")
             with open(jsonl_file, 'r') as infile:
                 file_lines = 0
-                for line in infile:
+                for line_num, line in enumerate(infile, 1):
                     line = line.strip()
                     if line:  # Skip empty lines
-                        outfile.write(line + '\n')
-                        file_lines += 1
-                        total_lines += 1
+                        try:
+                            # Parse JSON, add UUID, and write back
+                            json_data = json.loads(line)
+                            json_data['unique_id'] = str(uuid.uuid4())
+                            outfile.write(json.dumps(json_data) + '\n')
+                            file_lines += 1
+                            total_lines += 1
+                        except json.JSONDecodeError as e:
+                            print(f"  Warning: Failed to parse JSON in {jsonl_file.name} line {line_num}: {e}")
+                            continue
                 print(f"  Added {file_lines} lines from {jsonl_file.name}")
     
     print(f"Total merged lines: {total_lines}")
@@ -298,10 +305,8 @@ def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_
                     solution = content['response']
                     image_path = content['image_path']
                     
-                    # Get custom_id from original data structure
-                    custom_id = input_data.get('id', f'request-{line_num}')
-                    if 'subset_split' in input_data:
-                        custom_id = f"{custom_id}_{input_data['subset_split']}_{uuid.uuid4()}"
+                    # Get custom_id from unique_id added during merge, fallback to original id
+                    custom_id = input_data.get('unique_id', f'request-{line_num}')
                     
                     # Convert image to base64
                     if not image_path or not os.path.exists(image_path):

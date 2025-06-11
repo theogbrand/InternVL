@@ -16,5 +16,5 @@
     "/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs/verification_batches/batch_0012.jsonl",
     "/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs/verification_batches/batch_0013.jsonl"
   ],
-  "lines_per_batch": 246
+  "lines_per_batch": 249
 }
