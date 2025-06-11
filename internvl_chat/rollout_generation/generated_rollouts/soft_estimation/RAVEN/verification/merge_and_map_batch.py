@@ -244,11 +244,145 @@ def calculate_batch_requirements(total_lines: int, avg_tokens_per_line: float, m
     }
 
 
+def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_batch: int, total_batches: int) -> List[str]:
+    """Split merged JSONL file into separate batch files, transforming to OpenAI batch API format."""
+    
+    # Resolve paths
+    merged_path = Path(merged_file).resolve()
+    batch_dir = Path(batch_output_dir).resolve()
+    
+    print(f"\nSplitting JSONL file into batches:")
+    print(f"Source file: {merged_path}")
+    print(f"Batch directory: {batch_dir}")
+    print(f"Lines per batch: {lines_per_batch:,}")
+    print(f"Total batches: {total_batches}")
+    
+    if not merged_path.exists():
+        raise FileNotFoundError(f"Merged file {merged_path} does not exist")
+    
+    # Create batch output directory
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    
+    batch_files = []
+    current_batch = 1
+    lines_in_current_batch = 0
+    current_batch_file = None
+    current_batch_path = None
+    
+    try:
+        with open(merged_path, 'r') as infile:
+            for line_num, line in enumerate(infile, 1):
+                line = line.strip()
+                if not line:  # Skip empty lines
+                    continue
+                
+                # Parse the input JSON
+                try:
+                    input_data = json.loads(line)
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing JSON in line {line_num}: {e}")
+                    continue
+                
+                # Extract required data
+                try:
+                    content = extract_content_from_data(input_data)
+                    text_content = content['text']
+                    image_path = content['image_path']
+                    
+                    # Get custom_id from original data structure
+                    custom_id = input_data.get('id', f'request-{line_num}')
+                    if 'subset_split' in input_data:
+                        custom_id = f"{custom_id}_{input_data['subset_split']}"
+                    
+                    # Convert image to base64
+                    if not image_path or not os.path.exists(image_path):
+                        print(f"Warning: Image path {image_path} does not exist for line {line_num}, skipping")
+                        continue
+                        
+                    base64_image_url = local_image_to_data_url(image_path)
+                    
+                    # Transform to OpenAI batch API format
+                    transformed_data = {
+                        "custom_id": custom_id,
+                        "method": "POST",
+                        "url": "/chat/completions",
+                        "body": {
+                            "model": "o4-mini",
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": "answer the following question:"
+                                        },
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": base64_image_url
+                                            }
+                                        }
+                                    ]
+                                }
+                            ],
+                            "max_completion_tokens": 4096
+                        }
+                    }
+                    
+                except Exception as e:
+                    print(f"Error processing line {line_num}: {e}")
+                    continue
+                
+                # Start new batch if needed
+                if lines_in_current_batch == 0:
+                    if current_batch_file:
+                        current_batch_file.close()
+                    
+                    batch_filename = f"batch_{current_batch:04d}.jsonl"
+                    current_batch_path = batch_dir / batch_filename
+                    current_batch_file = open(current_batch_path, 'w')
+                    batch_files.append(str(current_batch_path))
+                    print(f"Creating batch {current_batch}: {batch_filename}")
+                
+                # Write transformed line to current batch
+                current_batch_file.write(json.dumps(transformed_data) + '\n')
+                lines_in_current_batch += 1
+                
+                # Check if current batch is full
+                if lines_in_current_batch >= lines_per_batch:
+                    current_batch_file.close()
+                    print(f"  Completed batch {current_batch}: {lines_in_current_batch:,} lines")
+                    current_batch += 1
+                    lines_in_current_batch = 0
+                    current_batch_file = None
+        
+        # Close the last batch file if it's still open
+        if current_batch_file:
+            current_batch_file.close()
+            print(f"  Completed batch {current_batch-1}: {lines_in_current_batch:,} lines")
+    
+    except Exception as e:
+        # Ensure we close any open file handles on error
+        if current_batch_file:
+            current_batch_file.close()
+        raise e
+    
+    print(f"\nSuccessfully created {len(batch_files)} batch files:")
+    for i, batch_file in enumerate(batch_files, 1):
+        file_path = Path(batch_file)
+        with open(file_path, 'r') as f:
+            line_count = sum(1 for line in f if line.strip())
+        print(f"  Batch {i}: {file_path.name} ({line_count:,} lines)")
+    
+    return batch_files
+
+
 def main():
     # Configuration
     input_folder = "/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/final_output"
     output_dir = "/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs"
     merged_file = os.path.join(output_dir, "merged_batch_output.jsonl")
+    batch_output_dir = os.path.join(output_dir, "verification_batches")
     sample_size = 1000
     
     # Ensure output directory exists
@@ -296,6 +430,37 @@ def main():
         
     except Exception as e:
         print(f"Error during batch calculation: {e}")
+        return
+    
+    print("\n" + "="*50 + "\n")
+    
+    # Step 4: Split merged file into batch files
+    print("Step 4: Splitting merged file into batch files...")
+    try:
+        batch_files = split_jsonl_into_batches(
+            merged_file=merged_file,
+            batch_output_dir=batch_output_dir,
+            lines_per_batch=batch_requirements['lines_per_batch'],
+            total_batches=batch_requirements['total_batches']
+        )
+        
+        # Save batch file list
+        batch_files_info = {
+            "batch_output_directory": batch_output_dir,
+            "total_batch_files": len(batch_files),
+            "batch_files": batch_files,
+            "lines_per_batch": batch_requirements['lines_per_batch']
+        }
+        
+        batch_files_info_file = os.path.join(output_dir, "batch_files_info.json")
+        with open(batch_files_info_file, 'w') as f:
+            json.dump(batch_files_info, f, indent=2)
+        
+        print(f"\n🎯 Successfully created {len(batch_files)} batch files in: {batch_output_dir}")
+        print(f"🎯 Batch files info saved to: {batch_files_info_file}")
+        
+    except Exception as e:
+        print(f"Error during batch file creation: {e}")
         return
 
 
