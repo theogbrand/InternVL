@@ -8,6 +8,8 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 from openai import AzureOpenAI, BadRequestError
 import uuid
+import re
+import argparse
 
 @dataclass
 class BatchJob:
@@ -22,7 +24,8 @@ class BatchJob:
 
 class BatchProcessor:
     def __init__(self, verification_batches_dir: str = "verification_batches", 
-                 max_retries: int = 10, azure_endpoint: str = None, api_key: str = None):
+                 max_retries: int = 10, azure_endpoint: str = None, api_key: str = None,
+                 start_index: int = None, end_index: int = None):
         # Set up logging
         self._setup_logging()
         
@@ -42,6 +45,8 @@ class BatchProcessor:
         self.verification_batches_dir = Path(verification_batches_dir)
         self.max_retries = max_retries
         self.initial_delay = 5
+        self.start_index = start_index
+        self.end_index = end_index
         
         # Track all jobs for this processor instance only
         self.completed_jobs: List[BatchJob] = []
@@ -57,6 +62,8 @@ class BatchProcessor:
         self.logger.info(f"  - Endpoint: {endpoint}")
         self.logger.info(f"  - Batches directory: {self.verification_batches_dir}")
         self.logger.info(f"  - Max retries: {max_retries}")
+        self.logger.info(f"  - Start index: {start_index}")
+        self.logger.info(f"  - End index: {end_index}")
         self.logger.info(f"  - Processing mode: Sequential")
     
     def _setup_logging(self):
@@ -113,14 +120,53 @@ class BatchProcessor:
             self.logger.error(error_msg)
             raise FileNotFoundError(error_msg)
         
+        # Sort files to ensure consistent ordering
+        sorted_files = sorted(jsonl_files)
+        
+        # Filter by batch indices if specified
+        filtered_files = []
+        if self.start_index is not None or self.end_index is not None:
+            for file in sorted_files:
+                # Extract batch number from filename (e.g., batch_0001.jsonl -> 1)
+                match = re.search(r'batch_(\d+)', file.name)
+                if match:
+                    batch_num = int(match.group(1))
+                    
+                    # Check if batch number is within specified range
+                    if self.start_index is not None and batch_num < self.start_index:
+                        continue
+                    if self.end_index is not None and batch_num > self.end_index:
+                        continue
+                    
+                    filtered_files.append(file)
+                else:
+                    # If no batch number found, include file if no filtering is specified
+                    if self.start_index is None and self.end_index is None:
+                        filtered_files.append(file)
+        else:
+            filtered_files = sorted_files
+        
+        if not filtered_files:
+            error_msg = f"No JSONL files found matching index range [{self.start_index}, {self.end_index}]"
+            self.logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
+        
+        # Log filtering information
+        if self.start_index is not None or self.end_index is not None:
+            self.logger.info(f"Filtering batches: start_index={self.start_index}, end_index={self.end_index}")
+            self.logger.info(f"Found {len(filtered_files)} matching files out of {len(sorted_files)} total files")
+        
         # Log each file found
-        self.logger.info(f"Found {len(jsonl_files)} JSONL files to process:")
-        for i, file in enumerate(sorted(jsonl_files), 1):
+        self.logger.info(f"Found {len(filtered_files)} JSONL files to process:")
+        for i, file in enumerate(filtered_files, 1):
             file_size = file.stat().st_size / (1024*1024)  # Size in MB
             self.logger.info(f"  {i:2d}. {file.name} ({file_size:.1f} MB)")
         
-        print(f"📁 Found {len(jsonl_files)} JSONL files to process")
-        return [str(f) for f in sorted(jsonl_files)]
+        print(f"📁 Found {len(filtered_files)} JSONL files to process")
+        if self.start_index is not None or self.end_index is not None:
+            print(f"🎯 Index range: [{self.start_index}, {self.end_index}]")
+        
+        return [str(f) for f in filtered_files]
     
     def upload_file(self, job: BatchJob) -> bool:
         """Upload a JSONL file to Azure OpenAI for batch processing."""
@@ -569,13 +615,15 @@ class BatchProcessor:
             self.logger.info(f"[{self.processor_id}] Note: Only cancelled batches submitted by this processor instance")
             print("ℹ️  Note: Only cancelled batches submitted by this processor instance")
 
-def main(check_interval_minutes: int = 1):
+def main(check_interval_minutes: int = 1, start_index: int = None, end_index: int = None):
     """Main entry point."""
     processor = BatchProcessor(
         verification_batches_dir="verification_pipeline_outputs/verification_batches",
         max_retries=10,
         azure_endpoint="https://aisg-sj.openai.azure.com/",  # o4-mini endpoint
-        api_key=os.getenv("AZURE_API_KEY")  # or provide directly
+        api_key=os.getenv("AZURE_API_KEY"),  # or provide directly
+        start_index=start_index,
+        end_index=end_index
     )
     
     try:
@@ -594,7 +642,9 @@ def run_processor(deployment_config):
             verification_batches_dir=f"verification_batches_{deployment_config['name']}",
             max_retries=10,
             azure_endpoint=deployment_config['endpoint'],
-            api_key=deployment_config['api_key']
+            api_key=deployment_config['api_key'],
+            start_index=None,
+            end_index=None
         )
         processor.process_all_batches()
         print(f"✅ Processor for {deployment_config['name']} completed")
@@ -602,4 +652,17 @@ def run_processor(deployment_config):
         print(f"❌ Processor for {deployment_config['name']} failed: {str(e)}")
 
 if __name__ == "__main__":
-    main() 
+    parser = argparse.ArgumentParser(description='Process batch files for verification')
+    parser.add_argument('--start-index', type=int, help='Start batch index (e.g., 3 for batch_0003)')
+    parser.add_argument('--end-index', type=int, help='End batch index (e.g., 13 for batch_0013)')
+    parser.add_argument('--check-interval', type=int, default=1, help='Check interval in minutes (default: 1)')
+    
+    args = parser.parse_args()
+    
+    # Print usage information
+    if args.start_index is not None or args.end_index is not None:
+        print(f"🎯 Processing batch range: [{args.start_index}, {args.end_index}]")
+    else:
+        print("🎯 Processing all batches")
+    
+    main(args.check_interval, args.start_index, args.end_index) 
