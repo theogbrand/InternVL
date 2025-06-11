@@ -282,7 +282,7 @@ def main():
     print("Step 3: Calculating batch requirements (1B token limit)...")
     try:
         total_lines = count_total_lines(merged_file)
-        batch_requirements = calculate_batch_requirements(total_lines, avg_tokens, max_tokens_per_batch=300_000)
+        batch_requirements = calculate_batch_requirements(total_lines, avg_tokens, max_tokens_per_batch=10_000_000)
         
         # Save batch requirements to file
         batch_info_file = os.path.join(output_dir, "batch_requirements.json")
