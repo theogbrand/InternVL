@@ -70,7 +70,7 @@ def extract_content_from_data(data: Dict[str, Any]) -> Dict[str, str]:
     image_path = data.get('combined_image_path', '')
     
     try:
-        if not isinstance(response, str):
+        if not isinstance(response, str) or not response.strip():
             raise ValueError("No text found in key 'response'")
         text_content = response
     except ValueError as e:
@@ -160,6 +160,9 @@ def calculate_average_tokens(jsonl_file: str, sample_size: int = 1000) -> float:
     
     average_tokens = sum(token_counts) / len(token_counts)
     
+    if average_tokens <= 0:
+        raise ValueError(f"Average tokens must be positive, got: {average_tokens}")
+    
     print(f"\nToken count statistics:")
     print(f"Valid samples processed: {len(token_counts)}")
     print(f"Min tokens: {min(token_counts)}")
@@ -167,6 +170,78 @@ def calculate_average_tokens(jsonl_file: str, sample_size: int = 1000) -> float:
     print(f"Average tokens: {average_tokens:.2f}")
     
     return average_tokens
+
+
+def count_total_lines(jsonl_file: str) -> int:
+    """Count total lines in the merged JSONL file."""
+    file_path = Path(jsonl_file).resolve()
+    
+    if not file_path.exists():
+        raise FileNotFoundError(f"File {file_path} does not exist")
+    
+    with open(file_path, 'r') as f:
+        total_lines = sum(1 for line in f if line.strip())
+    
+    print(f"Total lines in merged file: {total_lines:,}")
+    return total_lines
+
+
+def calculate_batch_requirements(total_lines: int, avg_tokens_per_line: float, max_tokens_per_batch: int = 1_000_000_000) -> Dict[str, Any]:
+    """Calculate batch requirements given total lines and token constraints."""
+    
+    print(f"\nCalculating batch requirements:")
+    print(f"Total lines: {total_lines:,}")
+    print(f"Average tokens per line: {avg_tokens_per_line:.2f}")
+    print(f"Max tokens per batch: {max_tokens_per_batch:,}")
+    
+    # Check for zero division
+    if avg_tokens_per_line <= 0:
+        raise ValueError(f"Average tokens per line must be positive, got: {avg_tokens_per_line}")
+    
+    if total_lines <= 0:
+        raise ValueError(f"Total lines must be positive, got: {total_lines}")
+    
+    # Calculate lines per batch using 90% of max tokens to maximize throughput while staying safe
+    effective_max_tokens = max_tokens_per_batch * 0.9
+    lines_per_batch = int(effective_max_tokens // avg_tokens_per_line)
+    print(f"Using 90% of max tokens ({effective_max_tokens:,.0f}) to maximize throughput")
+    
+    # Ensure at least 1 line per batch
+    if lines_per_batch <= 0:
+        lines_per_batch = 1
+        print(f"Warning: Very large tokens per line ({avg_tokens_per_line:.0f}), setting lines_per_batch to 1")
+    
+    # Calculate number of batches needed
+    total_batches = (total_lines + lines_per_batch - 1) // lines_per_batch  # Ceiling division
+    
+    # Calculate actual tokens per batch (except possibly the last batch)
+    tokens_per_batch = lines_per_batch * avg_tokens_per_line
+    
+    # Calculate lines in the last batch
+    lines_in_last_batch = total_lines % lines_per_batch
+    if lines_in_last_batch == 0:
+        lines_in_last_batch = lines_per_batch
+    
+    tokens_in_last_batch = lines_in_last_batch * avg_tokens_per_line
+    
+    print(f"\nBatch Requirements:")
+    print(f"Lines per batch: {lines_per_batch:,}")
+    print(f"Total batches needed: {total_batches}")
+    print(f"Tokens per batch: {tokens_per_batch:,.0f} ({tokens_per_batch/max_tokens_per_batch*100:.1f}% of limit, {tokens_per_batch/effective_max_tokens*100:.1f}% of target)")
+    print(f"Lines in last batch: {lines_in_last_batch:,}")
+    print(f"Tokens in last batch: {tokens_in_last_batch:,.0f} ({tokens_in_last_batch/max_tokens_per_batch*100:.1f}% of limit, {tokens_in_last_batch/effective_max_tokens*100:.1f}% of target)")
+    
+    return {
+        "total_lines": total_lines,
+        "avg_tokens_per_line": avg_tokens_per_line,
+        "max_tokens_per_batch": max_tokens_per_batch,
+        "effective_max_tokens": effective_max_tokens,
+        "lines_per_batch": lines_per_batch,
+        "total_batches": total_batches,
+        "tokens_per_batch": tokens_per_batch,
+        "lines_in_last_batch": lines_in_last_batch,
+        "tokens_in_last_batch": tokens_in_last_batch
+    }
 
 
 def main():
@@ -196,9 +271,31 @@ def main():
     print("Step 2: Calculating average tokens...")
     try:
         avg_tokens = calculate_average_tokens(merged_file, sample_size)
-        print(f"\n🎯 Final Result: Average tokens per JSONL object = {avg_tokens:.2f}")
+        print(f"\n🎯 Average tokens per JSONL object = {avg_tokens:.2f}")
     except Exception as e:
         print(f"Error during token calculation: {e}")
+        return
+    
+    print("\n" + "="*50 + "\n")
+    
+    # Step 3: Calculate batch requirements from merged file
+    print("Step 3: Calculating batch requirements (1B token limit)...")
+    try:
+        total_lines = count_total_lines(merged_file)
+        batch_requirements = calculate_batch_requirements(total_lines, avg_tokens, max_tokens_per_batch=300_000)
+        
+        # Save batch requirements to file
+        batch_info_file = os.path.join(output_dir, "batch_requirements.json")
+        
+        with open(batch_info_file, 'w') as f:
+            json.dump(batch_requirements, f, indent=2)
+        
+        print(f"\n🎯 Batch requirements saved to: {batch_info_file}")
+        print(f"🎯 Total batches needed: {batch_requirements['total_batches']}")
+        print(f"🎯 Lines per batch: {batch_requirements['lines_per_batch']:,}")
+        
+    except Exception as e:
+        print(f"Error during batch calculation: {e}")
         return
 
 

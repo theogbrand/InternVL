@@ -1,0 +1,11 @@
+{
+  "total_lines": 3182,
+  "avg_tokens_per_line": 37969.263,
+  "max_tokens_per_batch": 300000,
+  "effective_max_tokens": 270000.0,
+  "lines_per_batch": 7,
+  "total_batches": 455,
+  "tokens_per_batch": 265784.841,
+  "lines_in_last_batch": 4,
+  "tokens_in_last_batch": 151877.052
+}
