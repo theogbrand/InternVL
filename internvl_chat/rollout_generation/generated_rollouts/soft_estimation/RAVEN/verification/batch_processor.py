@@ -25,8 +25,13 @@ class BatchJob:
 class BatchProcessor:
     def __init__(self, verification_batches_dir: str = "verification_batches", 
                  max_retries: int = 10, azure_endpoint: str = None, api_key: str = None,
-                 start_index: int = None, end_index: int = None):
-        # Set up logging
+                 start_index: int = None, end_index: int = None, split: str = None):
+        # Store split first as it's needed for logging setup
+        if not split:
+            raise ValueError("Split parameter must be provided")
+        self.split = split
+        
+        # Set up logging (now that split is available)
         self._setup_logging()
         
         # Use provided parameters or fall back to defaults/environment
@@ -47,6 +52,7 @@ class BatchProcessor:
         self.initial_delay = 5
         self.start_index = start_index
         self.end_index = end_index
+        self.azure_endpoint = endpoint  # Store for logging
         
         # Track all jobs for this processor instance only
         self.completed_jobs: List[BatchJob] = []
@@ -56,8 +62,16 @@ class BatchProcessor:
         # Generate unique processor ID for safety
         self.processor_id = str(uuid.uuid4())[:8]
         
-        # Log initialization
+        # Log initialization with prominent split and endpoint information
+        self.logger.info("="*80)
+        self.logger.info("BATCH PROCESSOR CONFIGURATION")
+        self.logger.info("="*80)
+        self.logger.info(f"🎯 SPLIT: {self.split}")
+        self.logger.info(f"🌐 AZURE_ENDPOINT: {endpoint}")
+        self.logger.info(f"📋 PROCESSOR_ID: {self.processor_id}")
+        self.logger.info("="*80)
         self.logger.info(f"BatchProcessor initialized:")
+        self.logger.info(f"  - Split: {self.split}")
         self.logger.info(f"  - Processor ID: {self.processor_id}")
         self.logger.info(f"  - Endpoint: {endpoint}")
         self.logger.info(f"  - Batches directory: {self.verification_batches_dir}")
@@ -72,12 +86,12 @@ class BatchProcessor:
         log_dir = Path("batch_logs")
         log_dir.mkdir(exist_ok=True)
         
-        # Generate log filename with timestamp
+        # Generate log filename with timestamp and split
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = log_dir / f"batch_processor_{timestamp}.log"
+        log_file = log_dir / f"batch_processor_{self.split}_{timestamp}.log"
         
         # Configure logging
-        self.logger = logging.getLogger(f"BatchProcessor_{timestamp}")
+        self.logger = logging.getLogger(f"BatchProcessor_{self.split}_{timestamp}")
         self.logger.setLevel(logging.INFO)
         
         # Create formatter
@@ -304,7 +318,8 @@ class BatchProcessor:
         try:
             filename = Path(job.input_file).name
             output_filename = Path(job.input_file).stem + "_verification_results.json"
-            output_path = self.verification_batches_dir / "verification_pipeline_outputs" / output_filename
+            # Save results in the same directory as the batches (split-specific)
+            output_path = self.verification_batches_dir.parent / output_filename
             
             # Create output directory if it doesn't exist
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -476,9 +491,13 @@ class BatchProcessor:
     def process_all_batches(self, check_interval_minutes: int = 1):
         """Process batches one at a time: submit -> wait for completion -> submit next."""
         start_time = datetime.datetime.now()
-        self.logger.info("="*60)
+        self.logger.info("="*80)
         self.logger.info("STARTING SEQUENTIAL BATCH PROCESSING")
-        self.logger.info("="*60)
+        self.logger.info("="*80)
+        self.logger.info(f"🎯 PROCESSING SPLIT: {self.split}")
+        self.logger.info(f"🌐 USING ENDPOINT: {self.azure_endpoint}")
+        self.logger.info(f"📋 PROCESSOR ID: {self.processor_id}")
+        self.logger.info("="*80)
         
         input_files = self.discover_input_files()
         total_files = len(input_files)
@@ -536,9 +555,13 @@ class BatchProcessor:
         end_time = datetime.datetime.now()
         total_runtime = end_time - start_time
         
-        self.logger.info("="*60)
+        self.logger.info("="*80)
         self.logger.info("SEQUENTIAL PROCESSING COMPLETE")
-        self.logger.info("="*60)
+        self.logger.info("="*80)
+        self.logger.info(f"🎯 COMPLETED SPLIT: {self.split}")
+        self.logger.info(f"🌐 USED ENDPOINT: {self.azure_endpoint}")
+        self.logger.info(f"📋 PROCESSOR ID: {self.processor_id}")
+        self.logger.info("="*80)
         self.logger.info(f"Session runtime: {total_runtime}")
         self.logger.info(f"Total files: {total_files}")
         self.logger.info(f"Successfully completed: {len(self.completed_jobs)}")
@@ -547,6 +570,8 @@ class BatchProcessor:
         print("\n" + "="*50)
         print("🏁 SEQUENTIAL PROCESSING COMPLETE")
         print("="*50)
+        print(f"🎯 Split: {self.split}")
+        print(f"🌐 Endpoint: {self.azure_endpoint}")
         print(f"📊 Total files: {total_files}")
         print(f"✅ Completed: {len(self.completed_jobs)}")
         print(f"❌ Failed: {len(self.failed_jobs)}")
@@ -568,9 +593,11 @@ class BatchProcessor:
                 self.logger.info(f"  - {filename}")
                 print(f"  - {filename}")
         
-        self.logger.info("="*60)
+        self.logger.info("="*80)
         self.logger.info("SEQUENTIAL PROCESSING LOG COMPLETE")
-        self.logger.info("="*60)
+        self.logger.info(f"🎯 FINAL SPLIT: {self.split}")
+        self.logger.info(f"🌐 FINAL ENDPOINT: {self.azure_endpoint}")
+        self.logger.info("="*80)
 
     def cancel_my_active_batches(self) -> None:
         """Cancel only the batch jobs submitted by THIS processor instance."""
@@ -615,15 +642,25 @@ class BatchProcessor:
             self.logger.info(f"[{self.processor_id}] Note: Only cancelled batches submitted by this processor instance")
             print("ℹ️  Note: Only cancelled batches submitted by this processor instance")
 
-def main(check_interval_minutes: int = 1, start_index: int = None, end_index: int = None):
+def main(check_interval_minutes: int = 1, start_index: int = None, end_index: int = None, split: str = None, azure_endpoint: str = None):
     """Main entry point."""
+    if not split:
+        raise ValueError("Split parameter must be provided")
+    
+    # Use provided endpoint or default
+    endpoint = azure_endpoint or "https://decla-mbncunfi-australiaeast.cognitiveservices.azure.com/"
+    
+    print(f"🎯 Starting batch processing for split: {split}")
+    print(f"🌐 Using Azure endpoint: {endpoint}")
+    
     processor = BatchProcessor(
-        verification_batches_dir="verification_pipeline_outputs/verification_batches",
+        verification_batches_dir=f"verification_pipeline_outputs/{split}/verification_batches",
         max_retries=10,
-        azure_endpoint="https://aisg-sj.openai.azure.com/",  # o4-mini endpoint
+        azure_endpoint=endpoint,
         api_key=os.getenv("AZURE_API_KEY"),  # or provide directly
         start_index=start_index,
-        end_index=end_index
+        end_index=end_index,
+        split=split
     )
     
     try:
@@ -633,29 +670,13 @@ def main(check_interval_minutes: int = 1, start_index: int = None, end_index: in
     except Exception as e:
         print(f"❌ Fatal error: {str(e)}")
 
-    
-def run_processor(deployment_config):
-    """Run a single processor for a deployment."""
-    try:
-        print(f"🚀 Starting processor for {deployment_config['name']}")
-        processor = BatchProcessor(
-            verification_batches_dir=f"verification_batches_{deployment_config['name']}",
-            max_retries=10,
-            azure_endpoint=deployment_config['endpoint'],
-            api_key=deployment_config['api_key'],
-            start_index=None,
-            end_index=None
-        )
-        processor.process_all_batches()
-        print(f"✅ Processor for {deployment_config['name']} completed")
-    except Exception as e:
-        print(f"❌ Processor for {deployment_config['name']} failed: {str(e)}")
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Process batch files for verification')
     parser.add_argument('--start-index', type=int, help='Start batch index (e.g., 3 for batch_0003)')
     parser.add_argument('--end-index', type=int, help='End batch index (e.g., 13 for batch_0013)')
     parser.add_argument('--check-interval', type=int, default=1, help='Check interval in minutes (default: 1)')
+    parser.add_argument('--split', type=str, required=True, help='Split name (required parameter)')
+    parser.add_argument('--azure-endpoint', type=str, help='Azure OpenAI endpoint URL (optional)')
     
     args = parser.parse_args()
     
@@ -665,4 +686,6 @@ if __name__ == "__main__":
     else:
         print("🎯 Processing all batches")
     
-    main(args.check_interval, args.start_index, args.end_index) 
+    print(f"🎯 Using split: {args.split}")
+    
+    main(args.check_interval, args.start_index, args.end_index, args.split, args.azure_endpoint) 

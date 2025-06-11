@@ -4,6 +4,7 @@ import random
 import uuid
 import tiktoken
 import base64
+import argparse
 from pathlib import Path
 from typing import List, Dict, Any
 from mimetypes import guess_type
@@ -400,6 +401,10 @@ def main():
     batch_output_dir = os.path.join(output_dir, "verification_batches")
     sample_size = 1000
     
+    print(f"🎯 Using split: {split}")
+    print(f"📂 Input folder: {input_folder}")
+    print(f"📂 Output directory: {output_dir}")
+    
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
     print(f"Output directory: {output_dir}")
@@ -480,4 +485,13 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Merge and prepare JSONL files for batch verification')
+    parser.add_argument('--split', type=str, help='Split name (overrides SPLIT environment variable, default: distribute_four)')
+    
+    args = parser.parse_args()
+    
+    # Set split from command line if provided
+    if args.split:
+        os.environ['SPLIT'] = args.split
+    
     main()
