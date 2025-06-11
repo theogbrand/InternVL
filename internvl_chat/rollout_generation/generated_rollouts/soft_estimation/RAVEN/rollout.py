@@ -900,7 +900,7 @@ args = {
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
     'early_stop': False, # when a step results in an incorrect answer we immediately stop rollouts from THAT step.
-    'max_new_tokens': 4096,
+    'max_new_tokens': 8192,
     'temperature': 1.0,
     'max_workers': (os.cpu_count() or 4) * 8,  # 8x CPU cores for I/O-bound API calls
     'debug_granular': True,  # Enable granular rollout-level debug logging

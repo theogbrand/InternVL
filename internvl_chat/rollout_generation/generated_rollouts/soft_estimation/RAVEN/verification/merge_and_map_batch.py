@@ -339,7 +339,7 @@ def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_
                                     ]
                                 }
                             ],
-                            "max_completion_tokens": 4096
+                            "max_completion_tokens": 8192
                         }
                     }
                     
