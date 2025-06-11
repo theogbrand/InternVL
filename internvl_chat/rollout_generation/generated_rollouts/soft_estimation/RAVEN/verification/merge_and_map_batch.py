@@ -394,7 +394,7 @@ def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_
 
 def main():
     # Configuration
-    split = "distribute_four"
+    split = "distribute_nine"
     input_folder = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/final_output/{split}"
     output_dir = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs/{split}"
     merged_file = os.path.join(output_dir, "merged_batch_output.jsonl")
