@@ -7,6 +7,7 @@ Tests the BatchProcessor by submitting the first 2 JSONL files from verification
 import os
 import sys
 import signal
+import argparse
 from pathlib import Path
 
 # Add the current directory to the path so we can import batch_processor
@@ -29,6 +30,13 @@ def cleanup_handler(signum, frame):
 def main():
     """Test the BatchProcessor with the first 2 JSONL files."""
     global processor
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Test the BatchProcessor with the first 2 JSONL files.')
+    parser.add_argument('--split', type=str, required=True, help='Split name (required parameter)')
+    parser.add_argument('--azure-endpoint', type=str, default="https://aisg-sj.openai.azure.com/", 
+                        help='Azure OpenAI endpoint URL')
+    args = parser.parse_args()
     
     # Set up signal handlers for cleanup
     signal.signal(signal.SIGINT, cleanup_handler)
@@ -70,12 +78,14 @@ def main():
         processor = BatchProcessor(
             verification_batches_dir=str(test_dir),
             max_retries=5,
-            azure_endpoint="https://aisg-sj.openai.azure.com/",
-            api_key=os.getenv("AZURE_API_KEY")
+            azure_endpoint=args.azure_endpoint,
+            api_key=os.getenv("AZURE_API_KEY"),
+            split=args.split
         )
         
         print(f"\n🚀 Starting batch processing test...")
         print(f"📂 Using test directory: {test_dir}")
+        print(f"🎯 Using split: {args.split}")
         print(f"🔄 Max retries: 5")
         print(f"📋 Processing mode: Sequential (2 files)")
         print(f"🛑 Press Ctrl+C to stop and cancel only this processor's active batches")

@@ -3,24 +3,28 @@ import json
 import time
 import datetime
 import logging
+import httpx
 from pathlib import Path
-from typing import Dict, List, Optional
-from dataclasses import dataclass
+from typing import List, Optional
+# from dataclasses import dataclass
 from openai import AzureOpenAI, BadRequestError
 import uuid
 import re
 import argparse
+from pydantic import BaseModel, Field
 
-@dataclass
-class BatchJob:
+class BatchJob(BaseModel):
     input_file: str
-    status: str = "pending"  # pending, processing, completed, failed
+    status: str = Field(default="pending", description="pending, processing, completed, failed")
     created_at: Optional[int] = None
     retries: int = 0
     file_id: Optional[str] = None
     batch_id: Optional[str] = None
     output_file_id: Optional[str] = None
     error_file_id: Optional[str] = None
+    
+    class Config:
+        from_attributes = True  # For ORM compatibility
 
 class BatchProcessor:
     def __init__(self, verification_batches_dir: str = "verification_batches", 
@@ -41,10 +45,20 @@ class BatchProcessor:
         if not key:
             raise ValueError("API key must be provided either as parameter or AZURE_API_KEY environment variable")
         
+        # Configure timeouts explicitly
+        timeout = httpx.Timeout(
+            connect=10.0,  # Connection timeout
+            read=120.0,    # Read timeout (increased to handle longer operations)
+            write=30.0,    # Write timeout
+            pool=10.0      # Connection pool timeout
+        )
+        
         self.client = AzureOpenAI(
             api_key=key,  
             api_version="2025-03-01-preview",
-            azure_endpoint=endpoint
+            azure_endpoint=endpoint,
+            timeout=timeout,
+            max_retries=3  # Add automatic retries with exponential backoff
         )
         
         self.verification_batches_dir = Path(verification_batches_dir)
@@ -69,6 +83,8 @@ class BatchProcessor:
         self.logger.info(f"🎯 SPLIT: {self.split}")
         self.logger.info(f"🌐 AZURE_ENDPOINT: {endpoint}")
         self.logger.info(f"📋 PROCESSOR_ID: {self.processor_id}")
+        self.logger.info(f"⏱️ API TIMEOUTS: connect={timeout.connect}s, read={timeout.read}s, write={timeout.write}s")
+        self.logger.info(f"🔄 MAX RETRIES: {max_retries} (with exponential backoff)")
         self.logger.info("="*80)
         self.logger.info(f"BatchProcessor initialized:")
         self.logger.info(f"  - Split: {self.split}")
@@ -434,7 +450,11 @@ class BatchProcessor:
     def check_batch_completion(self, job: BatchJob) -> bool:
         """Check if a batch job is completed. Returns True if completed."""
         try:
+            # Add heartbeat log to track activity
+            self.logger.info(f"Checking status of batch: {job.batch_id}")
+            
             batch_response = self.client.batches.retrieve(job.batch_id)
+            
             status = batch_response.status
             job.status = f"batch_{status}"
             
@@ -464,52 +484,81 @@ class BatchProcessor:
                 
                 return True
                 
-            elif status in ("failed", "canceled"):
+            elif status == "failed":
                 job.status = "failed"
-                if batch_response.errors:
-                    for error in batch_response.errors.data:
-                        self.logger.error(f"Batch {filename} error - Code: {error.code}, Message: {error.message}")
-                
                 self.failed_jobs.append(job)
                 if job in self.my_active_jobs:
                     self.my_active_jobs.remove(job)  # Remove from my active jobs
+                
                 self.logger.error(f"Batch failed: {filename}")
                 print(f"❌ Batch failed: {filename}")
+                
+                # Log any errors
+                if batch_response.errors:
+                    for error in batch_response.errors.data:
+                        self.logger.error(f"Batch error: {error.code} - {error.message}")
+                        print(f"⚠️ Batch error: {error.code} - {error.message}")
+                
+                return True
+                
+            elif status == "canceled":
+                job.status = "canceled"
+                self.failed_jobs.append(job)
+                if job in self.my_active_jobs:
+                    self.my_active_jobs.remove(job)  # Remove from my active jobs
+                
+                self.logger.warning(f"Batch canceled: {filename}")
+                print(f"⚠️ Batch canceled: {filename}")
                 return True
                 
             else:
                 # Still in progress
                 self.logger.info(f"Batch {filename} status: {status}")
-                print(f"⏳ Batch {filename}: {status}")
                 return False
                 
         except Exception as e:
-            self.logger.error(f"Error checking batch {job.batch_id}: {str(e)}")
-            print(f"⚠️  Error checking batch: {str(e)}")
+            # Log the error but don't fail the entire process
+            error_msg = f"Error checking batch completion for {job.batch_id}: {str(e)}"
+            self.logger.error(error_msg)
+            print(f"⚠️ {error_msg}")
+            
+            # If we've had too many errors with this job, mark it as failed
+            job.retries += 1
+            if job.retries >= self.max_retries:
+                job.status = "max_retries_exceeded"
+                self.failed_jobs.append(job)
+                if job in self.my_active_jobs:
+                    self.my_active_jobs.remove(job)
+                self.logger.error(f"Maximum retries exceeded for batch: {job.batch_id}")
+                print(f"❌ Maximum retries exceeded for batch: {job.batch_id}")
+                return True
+            
+            # Otherwise, let's try again next time
             return False
-
+    
     def process_all_batches(self, check_interval_minutes: int = 1):
         """Process batches one at a time: submit -> wait for completion -> submit next."""
-        start_time = datetime.datetime.now()
-        self.logger.info("="*80)
-        self.logger.info("STARTING SEQUENTIAL BATCH PROCESSING")
-        self.logger.info("="*80)
-        self.logger.info(f"🎯 PROCESSING SPLIT: {self.split}")
-        self.logger.info(f"🌐 USING ENDPOINT: {self.azure_endpoint}")
-        self.logger.info(f"📋 PROCESSOR ID: {self.processor_id}")
-        self.logger.info("="*80)
-        
-        input_files = self.discover_input_files()
-        total_files = len(input_files)
-        
-        self.logger.info(f"Found {total_files} files to process sequentially")
-        for i, input_file in enumerate(input_files, 1):
-            self.logger.info(f"  {i:2d}. {Path(input_file).name}")
-        
-        print(f"🎯 Processing {total_files} batch jobs sequentially")
-        
         try:
+            start_time = datetime.datetime.now()
+            self.logger.info("="*80)
+            self.logger.info("STARTING SEQUENTIAL BATCH PROCESSING")
+            self.logger.info("="*80)
+            self.logger.info(f"🎯 PROCESSING SPLIT: {self.split}")
+            self.logger.info(f"🌐 USING ENDPOINT: {self.azure_endpoint}")
+            self.logger.info(f"📋 PROCESSOR ID: {self.processor_id}")
+            self.logger.info("="*80)
+            
+            input_files = self.discover_input_files()
+            total_files = len(input_files)
+            
+            self.logger.info(f"Found {total_files} files to process sequentially")
+            for i, input_file in enumerate(input_files, 1):
+                self.logger.info(f"  {i:2d}. {Path(input_file).name}")
+            
+            print(f"🎯 Processing {total_files} batch jobs sequentially")
+            
             current_job = None
+            self.current_job = None  # Store current job in instance variable for easier access
             file_index = 0
             check_interval = check_interval_minutes * 60  # Convert to seconds
             
@@ -523,24 +572,38 @@ class BatchProcessor:
                     print(f"\n📋 Processing file {file_index + 1}/{total_files}: {filename}")
                     
                     current_job = self.submit_single_batch(input_file)
+                    self.current_job = current_job  # Store for potential recovery
                     file_index += 1
                     
                     # If submission failed, move to next file
                     if current_job.status in ["upload_failed", "batch_creation_failed"]:
                         self.failed_jobs.append(current_job)
                         current_job = None
+                        self.current_job = None
                         continue
                 
                 # If we have a current job, check if it's completed
                 if current_job:
-                    if self.check_batch_completion(current_job):
-                        # Job completed (successfully or failed), clear current job
-                        current_job = None
-                    else:
-                        # Job still in progress, wait before next check
-                        self.logger.info(f"Waiting {check_interval_minutes} minute(s) before next check...")
-                        print(f"⏱️  Waiting {check_interval_minutes} minute(s) before next check...")
-                        time.sleep(check_interval)
+                    # Add a heartbeat log message with precise timestamp
+                    heartbeat_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                    self.logger.info(f"Heartbeat at {heartbeat_time}")
+                    
+                    try:
+                        if self.check_batch_completion(current_job):
+                            # Job completed (successfully or failed), clear current job
+                            current_job = None
+                            self.current_job = None
+                        else:
+                            # Job still in progress, wait before next check
+                            self.logger.info(f"Waiting {check_interval_minutes} minute(s) before next check...")
+                            print(f"⏱️  Waiting {check_interval_minutes} minute(s) before next check...")
+                            time.sleep(check_interval)
+                    except Exception as e:
+                        # Catch exceptions at this level to prevent entire process from failing
+                        self.logger.error(f"Error in batch monitoring loop: {str(e)}")
+                        print(f"⚠️ Error in batch monitoring: {str(e)}")
+                        # Add a short delay before continuing
+                        time.sleep(10)
             
         except KeyboardInterrupt:
             self.logger.warning(f"[{self.processor_id}] Processing interrupted by user")

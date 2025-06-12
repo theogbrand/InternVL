@@ -181,3 +181,4 @@ internvl_chat/sampled_outputs/*
 internvl_chat/SLURM_scripts/output_logs/*
 internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs/merged_batches_files/*
 internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs/*
+internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/test_verification_batches/*
