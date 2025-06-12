@@ -4,3 +4,4 @@
 4. run ./run_batch_processor.sh to verify the rollouts, checking for parameters in batch_processor.py
     - use test_batch_processor.py to test the batch processor
     - use test_timeout monitor to test recovery for stale Azure Batch Request
+    - Use prepare_and_check_batch.ipynb to check status and errors of batches manually based on deployment
