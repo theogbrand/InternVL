@@ -3,7 +3,7 @@ import sys
 
 sys.path.append('/data/users/brandon/ob1-projects/InternVL/internvl_chat/tools')
 
-from reasoning_data_pipeline.utils.accuracy_reward import extract_dvqa_answer_int_from_xml
+from reasoning_data_pipeline.utils.accuracy_reward import extract_dvqa_answer_int_from_xml, check_answer
 
 def test_valid_boxed_integer():
     """Test extraction of valid boxed integer answer"""
@@ -98,3 +98,33 @@ $\\boxed{123}$
 </correct_answer>
 More text"""
     assert extract_dvqa_answer_int_from_xml(input_text) == "123"
+
+def test_dvqa_int_only_score_exact_match():
+    """Test exact integer match for DVQA scoring"""
+    assert check_answer("42", "42", "dvqa_int_only_score") == 1
+    assert check_answer("0", "0", "dvqa_int_only_score") == 1
+    assert check_answer("-1", "-1", "dvqa_int_only_score") == 1
+
+def test_dvqa_int_only_score_mismatch():
+    """Test integer mismatch for DVQA scoring"""
+    assert check_answer("42", "43", "dvqa_int_only_score") == 0
+    assert check_answer("0", "1", "dvqa_int_only_score") == 0
+    assert check_answer("-1", "1", "dvqa_int_only_score") == 0
+
+def test_dvqa_int_only_score_invalid_input():
+    """Test invalid input handling for DVQA scoring"""
+    assert check_answer("not a number", "42", "dvqa_int_only_score") == 0
+    assert check_answer("42", "not a number", "dvqa_int_only_score") == 0
+    assert check_answer("abc", "def", "dvqa_int_only_score") == 0
+
+def test_dvqa_int_only_score_with_whitespace():
+    """Test DVQA scoring with whitespace handling"""
+    assert check_answer(" 42 ", "42", "dvqa_int_only_score") == 1
+    assert check_answer("42", " 42 ", "dvqa_int_only_score") == 1
+    assert check_answer(" 42 ", " 42 ", "dvqa_int_only_score") == 1
+
+def test_dvqa_int_only_score_negative_integers():
+    """Test DVQA scoring with negative integers"""
+    assert check_answer("-42", "-42", "dvqa_int_only_score") == 1
+    assert check_answer("-0", "-0", "dvqa_int_only_score") == 1
+    assert check_answer("-1", "-1", "dvqa_int_only_score") == 1

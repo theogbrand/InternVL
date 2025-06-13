@@ -385,6 +385,18 @@ def raven_score(answer_pred, answer_gt):
     
     return 0
 
+def dvqa_int_only_score(answer_pred, answer_gt):
+    """Exact string match for DVQA dataset, supporting negative integers"""
+    answer_pred = answer_pred.strip()
+    answer_gt = answer_gt.strip()
+    
+    try:
+        # Handle negative numbers by removing any extra spaces around the minus sign
+        pred_int = int(answer_pred.replace(' -', '-').replace('- ', '-'))
+        gt_int = int(answer_gt.replace(' -', '-').replace('- ', '-'))
+        return 1 if pred_int == gt_int else 0
+    except ValueError:
+        return 0
 
 def parse_answer(response, prompt_version):
     if prompt_version in ['zh', 'en']:
@@ -393,7 +405,7 @@ def parse_answer(response, prompt_version):
         return None, extract_answer_from_box(response)
     if prompt_version == 'raven_v1':
         return None, extract_raven_choices_answer_from_xml(response)
-    if prompt_version == 'dvqa_v1':
+    if prompt_version == 'dvqa_v1_int_only':
         return None, extract_dvqa_answer_int_from_xml(response)
     raise NotImplementedError(f'Unsupported prompt_version: {prompt_version}')
 
@@ -518,13 +530,7 @@ def extract_dvqa_answer_int_from_xml(ans):
     assert end_tag in ans, f'Missing closing tag {end_tag}: {ans}'
     assert ans.count(start_tag) == ans.count(end_tag), f'Mismatched XML tags: {ans.count(start_tag)} opening vs {ans.count(end_tag)} closing'
     
-    # Look for LaTeX boxed integer pattern with $ delimiters
-    boxed_match = re.search(r'\$\\boxed{(\d+)}\$', content)
-    if boxed_match:
-        return boxed_match.group(1)
-    
-    # If no pattern found, return original content
-    return content
+    return extract_answer_from_box(content)
 
 
 def check_answer(answer_pred, answer_gt, mode):
@@ -577,8 +583,11 @@ def check_answer(answer_pred, answer_gt, mode):
     if 'raven_score' in mode:
         accuracy = max(accuracy, raven_score(answer_pred, answer_gt))
 
+    if 'dvqa_int_only_score' in mode:
+        accuracy = max(accuracy, dvqa_int_only_score(answer_pred, answer_gt))
+
     accuracy = int(accuracy > 0.9)
-    evaluator_cache[(answer_pred, answer_gt)] = accuracy
+    # evaluator_cache[(answer_pred, answer_gt)] = accuracy
     return accuracy
 
 
