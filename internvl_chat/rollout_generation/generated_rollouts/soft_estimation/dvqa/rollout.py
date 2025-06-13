@@ -505,14 +505,14 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
                 
                 formatted_prefix = ""
                 if step_idx < perception_count:
-                    formatted_prefix += "[Perception]\n"
+                    formatted_prefix += "[Visual Elements]\n"
                     for i, step in enumerate(prefix_steps):
                         formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
                 else:
-                    formatted_prefix += "[Perception]\n"
+                    formatted_prefix += "[Visual Elements]\n"
                     for i, step in enumerate(steps['perception_steps']):
                         formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
-                    formatted_prefix += "\n[Reasoning]\n"
+                    formatted_prefix += "\n[Analysis and Interpretation]\n"
                     reasoning_steps = prefix_steps[perception_count:]
                     for i, step in enumerate(reasoning_steps):
                         formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
@@ -894,11 +894,11 @@ args = {
     'api_version': api_version,
     'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/DVQA/subset_jsonl/dvqa_run1_int_only.jsonl',
     'out_dir': 'dvqa_int_rollouts_output',
-    'batch_size': 14,  # 125 samples per batch
+    'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 6,  # 20×4 = 80 requests per batch (conservative RPM utilization)
     'sample_start_idx': 0,
     'sample_end_idx': 681,
-    'prompt_format_version': 'dvqa_v1',
+    'prompt_format_version': 'dvqa_v1_int_only',
     'scoring_mode': 'dvqa_int_only_score',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
