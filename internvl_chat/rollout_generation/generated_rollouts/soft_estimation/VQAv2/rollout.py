@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 # Initialize logger early to avoid NameError issues
-logger = logging.getLogger('clevr_rollout')
+logger = logging.getLogger('vqav2_rollout')
 
 # Add the tools directory to the path
 sys.path.append('/data/users/brandon/ob1-projects/InternVL/internvl_chat/tools')
@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbndl4ye-norwayeast.cognitiveservices.azure.com/"
-deployment = "gpt-4.1-13"
+endpoint = "https://decla-mbne7xly-polandcentral.cognitiveservices.azure.com/"
+deployment = "gpt-4.1-18"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -76,7 +76,7 @@ def local_image_to_data_url(image_path):
     # Construct the data URL
     return f"data:{mime_type};base64,{base64_encoded_data}"
 
-class CLEVR_V1_INT_ONLYDataset(torch.utils.data.Dataset):
+class VQAv2_V1_INT_ONLYDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         data,
@@ -109,7 +109,7 @@ class CLEVR_V1_INT_ONLYDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         item = json.loads(self.data[idx])
         
-        # CLEVR dataset structure: image, question, answer, uid, image_path
+        # VQAv2 dataset structure: image, question, answer, uid, image_path
         image_path = item['image_path']
         question = item['question']
         answer = item['answer']
@@ -897,13 +897,13 @@ args = {
     'endpoint': endpoint,
     'deployment': deployment,
     'api_version': api_version,
-    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/CLEVR-MATH/prepared_jsonl/CLEVR_run1_int_only.jsonl',
-    'out_dir': 'clevr_int_rollouts_output',
+    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/VQAv2/prepared_jsonl/vqav2_run1_int_only_4K_v1_subset.jsonl',
+    'out_dir': 'vqav2_int_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
-    'sample_start_idx': 4775,
-    'sample_end_idx': 5456,
-    'prompt_format_version': 'dvqa_v1_int_only',
+    'sample_start_idx': 1, # for line-based idx, start from 1-indexed
+    'sample_end_idx': 800,
+    'prompt_format_version': 'dvqa_v1_int_only', # dvqa_v1_int_only reused for integer-only, exact match. Includes negative number matching
     'scoring_mode': 'dvqa_int_only_score',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
@@ -967,7 +967,7 @@ def main():
     logger.info(f"Log file: {log_filepath}")
 
     # Load and process RAVEN dataset
-    dataset = CLEVR_V1_INT_ONLYDataset(
+    dataset = VQAv2_V1_INT_ONLYDataset(
         data=args['prompt_path'],
         sample_start_idx=args['sample_start_idx'],
         sample_end_idx=args['sample_end_idx'],

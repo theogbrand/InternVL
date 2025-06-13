@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# CLEVR Rollout Runner with Streaming Support
+# VQAv2 Rollout Runner with Streaming Support
 # Usage: ./run_rollout.sh [action]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROLLOUT_SCRIPT="$SCRIPT_DIR/rollout.py"
-OUTPUT_DIR="$SCRIPT_DIR/clevr_int_rollouts_output"
+OUTPUT_DIR="$SCRIPT_DIR/vqav2_int_rollouts_output"
 LOG_DIR="$OUTPUT_DIR/screen_logs"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-SCREEN_NAME="clevr_rollout_$TIMESTAMP"
+SCREEN_NAME="vqav2_rollout_$TIMESTAMP"
 
 # Create directories
 mkdir -p "$OUTPUT_DIR"
@@ -16,7 +16,7 @@ mkdir -p "$LOG_DIR"
 
 # Function to start rollout
 start_rollout() {
-    echo "Starting CLEVR rollout with streaming support..."
+    echo "Starting VQAv2 rollout with streaming support..."
     
     # Check API key
     if [ -z "$AZURE_API_KEY" ]; then
@@ -60,8 +60,8 @@ start_rollout() {
 
 # Function to show running sessions
 status() {
-    echo "Active CLEVR rollout sessions:"
-    screen -list | grep clevr_rollout || echo "No active sessions"
+    echo "Active VQAv2 rollout sessions:"
+    screen -list | grep vqav2_rollout || echo "No active sessions"
     echo ""
     echo "Recent logs:"
     ls -lt "$LOG_DIR"/*.log 2>/dev/null | head -3 || echo "No logs found"
@@ -73,8 +73,8 @@ status() {
 # Function to cleanup
 cleanup() {
     echo "Cleaning up..."
-    # Kill all clevr rollout sessions
-    screen -list | grep clevr_rollout | cut -d. -f1 | awk '{print $1}' | xargs -I {} screen -S {} -X quit 2>/dev/null
+    # Kill all vqav2 rollout sessions
+    screen -list | grep vqav2_rollout | cut -d. -f1 | awk '{print $1}' | xargs -I {} screen -S {} -X quit 2>/dev/null
     echo "Cleanup complete"
 }
 
