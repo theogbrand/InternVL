@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbne7xly-polandcentral.cognitiveservices.azure.com/"
-deployment = "gpt-4.1-18"
+endpoint = "https://decla-mbnfcymf-spaincentral.cognitiveservices.azure.com/"
+deployment = "gpt-4.1-22"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -900,8 +900,8 @@ args = {
     'out_dir': 'vqav2_int_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
-    'sample_start_idx': 1, # for line-based idx, start from 1-indexed
-    'sample_end_idx': 800,
+    'sample_start_idx': 3201, # for line-based idx, start from 1-indexed
+    'sample_end_idx': 4000,
     'prompt_format_version': 'dvqa_v1_int_only', # dvqa_v1_int_only reused for integer-only, exact match. Includes negative number matching
     'scoring_mode': 'vqav2_num_str_only_score',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
