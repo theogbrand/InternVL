@@ -76,7 +76,7 @@ def local_image_to_data_url(image_path):
     # Construct the data URL
     return f"data:{mime_type};base64,{base64_encoded_data}"
 
-class VQAv2_V1_INT_ONLYDataset(torch.utils.data.Dataset):
+class VQAv2_V1_INT_ONLYDataset(torch.utils.data.Dataset): # also numeric strings like "02393"
     def __init__(
         self,
         data,
@@ -119,7 +119,7 @@ class VQAv2_V1_INT_ONLYDataset(torch.utils.data.Dataset):
 
 You will be provided with:
 
-1. An image containing various elements, which may include geometric shapes (such as cubes, spheres, and cylinders), objects, scenes, and their spatial relationships, as well as text or numbers.
+1. An image containing objects, scenes, geometric shapes, text, or numbers.
 2. A question about the contents of the image.
 
 Here is the question you need to answer:
@@ -186,7 +186,7 @@ $\boxed{numeric_string}$
 ```
 
 Remember to:
-- Provide only an numeric string answer in the <correct_answer> section using the $\boxed{numeric_string}$ format, and no other text or commentary.""".replace('{{QUESTION}}', question)
+- Provide only a single numeric string answer in the <correct_answer> section using the $\boxed{numeric_string}$ format, and no other text or commentary.""".replace('{{QUESTION}}', question)
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
