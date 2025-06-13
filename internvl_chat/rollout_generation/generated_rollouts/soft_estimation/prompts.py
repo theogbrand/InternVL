@@ -6,7 +6,7 @@ I will provide you with an image containing:
 Here's the question you need to answer:
 
 <question>
-What is the value of the smallest individual bar in the whole chart? Answer the question using a single word or phrase.
+{{QUESTION}}
 </question>
 
 Please follow these steps to complete the task:

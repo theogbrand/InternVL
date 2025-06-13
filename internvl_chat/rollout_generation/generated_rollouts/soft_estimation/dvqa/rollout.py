@@ -10,6 +10,7 @@ import signal
 from datetime import datetime
 from mimetypes import guess_type
 from collections import defaultdict
+from internvl_chat.rollout_generation.generated_rollouts.soft_estimation.RAVEN.verification import prompts
 import torch
 from PIL import Image
 from openai import AzureOpenAI
@@ -80,7 +81,7 @@ def local_image_to_data_url(image_path):
     # Construct the data URL
     return f"data:{mime_type};base64,{base64_encoded_data}"
 
-class RAVENDataset(torch.utils.data.Dataset):
+class DVQA_V1_INT_ONLYDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         data,
@@ -95,36 +96,17 @@ class RAVENDataset(torch.utils.data.Dataset):
                 total_lines += 1
                 try:
                     item = json.loads(line)
-                    item_id = item.get('id', -1)
-                    
-                    # Include if no filtering or ID is in range
-                    if sample_end_idx is None or (sample_start_idx <= item_id <= sample_end_idx):
+                    # Include if no filtering or within range
+                    if sample_end_idx is None or (sample_start_idx <= total_lines <= sample_end_idx):
                         self.data.append(line)
                         
                 except json.JSONDecodeError:
                     continue
 
         if sample_end_idx is not None:
-            print(f'Filtered {total_lines} lines to {len(self.data)} samples in ID range [{sample_start_idx}, {sample_end_idx}]')
+            print(f'Filtered {total_lines} lines to {len(self.data)} samples in range [{sample_start_idx}, {sample_end_idx}]')
         else:
-            print(f'Loaded {len(self.data)} samples (no ID filtering)')
-
-    def apply_step_sampling(self, sample_max_num, sample_start_idx=0):
-        """
-        Apply step-wise sampling (old sample_max_num functionality).
-        
-        Args:
-            sample_max_num: Maximum number of samples to keep
-            sample_start_idx: Starting line position for sampling
-            
-        Returns:
-            None (modifies self.data in place)
-        """
-        if sample_max_num is not None and len(self.data) > sample_max_num:
-            print(f'Applying step sampling: {len(self.data)} => {sample_max_num}')
-            step = max(len(self.data) // sample_max_num, 1)
-            self.data = self.data[sample_start_idx::step][:sample_max_num]
-            print(f'Number of data lines after step sampling: {len(self.data)}')
+            print(f'Loaded {len(self.data)} samples (no filtering)')
 
     def __len__(self):
         return len(self.data)
@@ -132,62 +114,21 @@ class RAVENDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         item = json.loads(self.data[idx])
         
-        # RAVEN dataset structure: id, combined_image_path, correct_answer, subset_split
-        image_path = item['combined_image_path']
-        correct_answer = item['correct_answer']
+        # DVQA dataset structure: image, question, answer, uid, image_path
+        image_path = item['image_path']
+        question = item['question']
+        answer = item['answer']
+        uid = item['uid']
         
-        rollout_user_prompt = r"""You are an abstract reasoning puzzle expert. The puzzle you will receive is presented in a standard Raven's Progressive Matrices format: a 3×3 matrix of related images, with the bottom-right cell (the ninth tile) missing. There are eight possible answer choices provided separately, and your task is to decide which of those eight images correctly completes the 3×3 matrix pattern.
-
-I will provide you with an image containing:
-- Problem Matrix: An accompanying image that shows the eight tiles and highlights where the ninth is missing.
-- Answer Set: The eight candidate images from which you must choose the best fit for the missing tile.
-
-Your task is to:
-- Review the problem matrix and the accompanying image in sequence, describing step-by-step what you see in the image in <perception> tags.
-- Reason step-by-step about the logical pattern or rule connecting the tiles in <reasoning> tags.
-- Deduce the correct tile from the eight provided options in <correct_answer> tags.
-
-It is crucial that your solution contains these sections in the exact format described below:
-
-```
-[Perception]
-<step_1>
-...(Step 1 of step-by-step perception)...
-</step_1>
-<step_2>
-...(Step 2 of step-by-step perception)...
-</step_2>
-...
-<step_n>
-...(Step n of step-by-step perception)...
-</step_n>
-
-[Reasoning]
-<step_1>
-...(Step 1 of step-by-step reasoning)...
-</step_1>
-<step_2>
-...(Step 2 of step-by-step reasoning)...
-</step_2>
-...
-<step_m>
-...(Step m of step-by-step reasoning)...
-</step_m>
-
-<correct_answer>
-...(Clearly state which of the 8 candidate images is the best candidate image as the missing tile to complete the matrix. If the candidates are numbered, lettered, or can be uniquely described, use that identifier.)...
-</correct_answer>
-```
-"""
+        rollout_user_prompt = prompts.DVQA_V1_ROLLOUT_PROMPT.replace('{{QUESTION}}', question)
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
-            'image': image_path,  # Pass path directly instead of PIL object
-            'image_path': image_path,
-            'item': item.copy(),
-            'correct_answer': correct_answer,
-            'id': item['id'],
-            'subset_split': item['subset_split'],
+            'image': image_path,
+            'question': question,
+            'answer': answer,
+            'uid': uid,
+            'item': item.copy()
         }
 
 
@@ -954,7 +895,7 @@ def main():
     logger.info(f"Log file: {log_filepath}")
 
     # Load and process RAVEN dataset
-    dataset = RAVENDataset(
+    dataset = DVQA_V1_INT_ONLYDataset(
         data=args['prompt_path'],
         sample_start_idx=args['sample_start_idx'],
         sample_end_idx=args['sample_end_idx'],
