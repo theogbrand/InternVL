@@ -115,12 +115,14 @@ class DVQA_V1_INT_ONLYDataset(torch.utils.data.Dataset):
         answer = item['answer']
         uid = item['uid']
         
-        rollout_user_prompt = r"""You are an expert data analyst specializing in interpreting data visualizations. Your task is to answer questions about charts and graphs presented to you in images. You will be provided with an image containing one or more data visualizations and a specific question about the data presented.
+        rollout_user_prompt = r"""You are an advanced visual reasoning AI specialized in analyzing images. Your task is to examine images containing simple geometric shapes and answer questions about their attributes and relationships.
 
-I will provide you with an image containing:
-- Data Visualization: A chart or graph that contains data points and other visual elements.
+You will be provided with:
 
-Here's the question you need to answer:
+1. An image containing geometric shapes (cubes, spheres, and cylinders) with various attributes (colors, sizes, materials) and spatial relationships.
+2. A question about the contents of the image.
+
+Here is the question you need to answer:
 
 <question>
 {{QUESTION}}
@@ -128,18 +130,24 @@ Here's the question you need to answer:
 
 Please follow these steps to complete the task:
 
-1. Carefully examine the image, paying attention to all elements of the data visualization(s) such as titles, labels, axes, legends, and data points.
+1. Carefully examine the image, paying attention to:
+   - Types of shapes present (cubes, spheres, cylinders)
+   - Attributes of each shape (color, size, material)
+   - Spatial relationships between shapes
 
-2. Analyze the data presented in the visualization(s), identifying specific data points or trends that relate to the question asked.
+2. Read and understand the question, identifying the type of reasoning required (counting, existence, comparison, or attribute query).
 
-3. Interpret the data and connect it to the specific question asked. Consider how the data directly relates to answering the question.
+3. Analyze the image in relation to the question, focusing on relevant shapes and attributes.
 
-4. Reason through your analysis and interpretation to determine the answer to the question. The answer must be a single integer.
+4. Formulate your answer based on your analysis.
 
-5. Present your answer in a LaTeX-formatted box using this format: `<correct_answer>\n$\boxed{integer}$\n</correct_answer>`.
+5. Present your final answer as a single integer in a LaTeX-formatted box using this format: 
+   <correct_answer>
+   $\boxed{integer}$
+   </correct_answer>
 
 Your task is to: 
-- Under the [Visual Elements] section of your thinking block, list out your step-by-step perception of the visual elements in the chart. Be thorough but concise. Wrap each element in <step> tags and prepend each with a number, counting up.
+- Under the [Visual Elements] section of your thinking block, list out your step-by-step perception of the visual elements in the image. Be thorough but concise. Wrap each element in <step> tags and prepend each with a number, counting up.
 - Under the [Reasoning] section of your thinking block, explain your step-by-step reasoning process. This should include your analysis, interpretation, and how you arrived at the answer. Provide a clear justification of how you derived the answer from the data presented. Wrap each step in <step> tags and prepend each with a number, counting up.
 - Present your final answer using the LaTeX-formatted box in `<correct_answer>` tags.
 
@@ -175,7 +183,7 @@ $\boxed{integer}$
 </correct_answer>
 ```
 
-Important: Your output must strictly adhere to this format. Do not include any additional text or explanations outside of these sections. Your final output should consist only of the LaTeX-formatted box with the answer and should not duplicate or rehash any of the work you did in the thinking block.""".replace('{{QUESTION}}', question)
+Remember, your final output should consist only of the LaTeX-formatted box with the answer. Do not include any additional text or explanations outside of the [Visual Elements], [Reasoning], and <correct_answer> sections. Do not duplicate or rehash any of the work you did in the thinking block.""".replace('{{QUESTION}}', question)
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
