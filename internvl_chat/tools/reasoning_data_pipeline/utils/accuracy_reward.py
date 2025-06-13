@@ -397,6 +397,22 @@ def dvqa_int_only_score(answer_pred, answer_gt):
         return 1 if pred_int == gt_int else 0
     except ValueError:
         return 0
+    
+def vqav2_num_str_only_score(answer_pred, answer_gt):
+    """Exact string match for VQAv2 dataset, preserving leading zeros and numeric format"""
+    answer_pred = answer_pred.strip()
+    answer_gt = answer_gt.strip()
+    
+    # Handle negative numbers by removing any extra spaces around the minus sign
+    answer_pred = answer_pred.replace(' -', '-').replace('- ', '-')
+    answer_gt = answer_gt.replace(' -', '-').replace('- ', '-')
+    
+    # Verify both are valid numeric strings
+    try:
+        int(answer_pred)
+        int(answer_gt)
+    except ValueError:
+        return 0
 
 def parse_answer(response, prompt_version):
     if prompt_version in ['zh', 'en']:

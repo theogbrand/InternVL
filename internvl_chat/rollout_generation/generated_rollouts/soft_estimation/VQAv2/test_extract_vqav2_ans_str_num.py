@@ -101,30 +101,87 @@ More text"""
 
 def test_dvqa_int_only_score_exact_match():
     """Test exact integer match for DVQA scoring"""
-    assert check_answer("42", "42", "dvqa_int_only_score") == 1
-    assert check_answer("0", "0", "dvqa_int_only_score") == 1
-    assert check_answer("-1", "-1", "dvqa_int_only_score") == 1
+    assert check_answer("42", "42", "vqav2_num_str_only_score") == 1
+    assert check_answer("0", "0", "vqav2_num_str_only_score") == 1
+    assert check_answer("-1", "-1", "vqav2_num_str_only_score") == 1
 
 def test_dvqa_int_only_score_mismatch():
     """Test integer mismatch for DVQA scoring"""
-    assert check_answer("42", "43", "dvqa_int_only_score") == 0
-    assert check_answer("0", "1", "dvqa_int_only_score") == 0
-    assert check_answer("-1", "1", "dvqa_int_only_score") == 0
+    assert check_answer("42", "43", "vqav2_num_str_only_score") == 0
+    assert check_answer("0", "1", "vqav2_num_str_only_score") == 0
+    assert check_answer("-1", "1", "vqav2_num_str_only_score") == 0
 
 def test_dvqa_int_only_score_invalid_input():
     """Test invalid input handling for DVQA scoring"""
-    assert check_answer("not a number", "42", "dvqa_int_only_score") == 0
-    assert check_answer("42", "not a number", "dvqa_int_only_score") == 0
-    assert check_answer("abc", "def", "dvqa_int_only_score") == 0
+    assert check_answer("not a number", "42", "vqav2_num_str_only_score") == 0
+    assert check_answer("42", "not a number", "vqav2_num_str_only_score") == 0
+    assert check_answer("abc", "def", "vqav2_num_str_only_score") == 0
 
 def test_dvqa_int_only_score_with_whitespace():
     """Test DVQA scoring with whitespace handling"""
-    assert check_answer(" 42 ", "42", "dvqa_int_only_score") == 1
-    assert check_answer("42", " 42 ", "dvqa_int_only_score") == 1
-    assert check_answer(" 42 ", " 42 ", "dvqa_int_only_score") == 1
+    input_text = """<correct_answer>
+ $\\boxed{42}$
+</correct_answer>"""
+    extracted = extract_dvqa_answer_int_from_xml(input_text)
+    assert check_answer(extracted, "42", "vqav2_num_str_only_score") == 1
+
+    input_text = """<correct_answer>
+$\\boxed{42}$
+</correct_answer>"""
+    extracted = extract_dvqa_answer_int_from_xml(input_text)
+    assert check_answer(extracted, "42", "vqav2_num_str_only_score") == 1
+
+    input_text = """<correct_answer>
+ $\\boxed{42}$
+</correct_answer>"""
+    extracted = extract_dvqa_answer_int_from_xml(input_text)
+    assert check_answer(extracted, "42", "vqav2_num_str_only_score") == 1
+
+
+def test_dvqa_int_only_score_with_leading_zeros():
+    """Test DVQA scoring with leading zeros handling"""
+    input_text = """<correct_answer>
+ $\\boxed{0042}$
+</correct_answer>"""
+    extracted = extract_dvqa_answer_int_from_xml(input_text)
+    assert check_answer(extracted, "0042", "vqav2_num_str_only_score") == 1
+
+    input_text = """<correct_answer>
+$\\boxed{42000}$
+</correct_answer>"""
+    extracted = extract_dvqa_answer_int_from_xml(input_text)
+    assert check_answer(extracted, "42000", "vqav2_num_str_only_score") == 1
+
+    input_text = """<correct_answer>
+ $\\boxed{004200}$
+</correct_answer>"""
+    extracted = extract_dvqa_answer_int_from_xml(input_text)
+    assert check_answer(extracted, "004200", "vqav2_num_str_only_score") == 1
 
 def test_dvqa_int_only_score_negative_integers():
     """Test DVQA scoring with negative integers"""
-    assert check_answer("-42", "-42", "dvqa_int_only_score") == 1
-    assert check_answer("-0", "-0", "dvqa_int_only_score") == 1
-    assert check_answer("-1", "-1", "dvqa_int_only_score") == 1
+    assert check_answer("-42", "-42", "vqav2_num_str_only_score") == 1
+    assert check_answer("-0", "-0", "vqav2_num_str_only_score") == 1
+    assert check_answer("-1", "-1", "vqav2_num_str_only_score") == 1
+
+def test_dvqa_int_only_score_random_integers():
+    """Test DVQA scoring with random integer strings"""
+    assert check_answer("02939", "02939", "vqav2_num_str_only_score") == 1
+    assert check_answer("00042", "00042", "vqav2_num_str_only_score") == 1
+    assert check_answer("123456789", "123456789", "vqav2_num_str_only_score") == 1
+    assert check_answer("02939", "2939", "vqav2_num_str_only_score") == 0  # Leading zeros matter
+    assert check_answer("00042", "42", "vqav2_num_str_only_score") == 0  # Leading zeros matter
+
+def test_boxed_integer_with_leading_zeros():
+    """Test extraction of boxed integer with leading zeros"""
+    input_text = """<correct_answer>
+$\\boxed{09123}$
+</correct_answer>"""
+    assert extract_dvqa_answer_int_from_xml(input_text) == "09123"
+
+def test_boxed_integer_with_trailing_zeros():
+    """Test extraction of boxed integer with trailing zeros"""
+    input_text = """<correct_answer>
+$\\boxed{09123000}$
+</correct_answer>"""
+    assert extract_dvqa_answer_int_from_xml(input_text) == "09123000"

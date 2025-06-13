@@ -115,11 +115,11 @@ class VQAv2_V1_INT_ONLYDataset(torch.utils.data.Dataset):
         answer = item['answer']
         uid = item['uid']
         
-        rollout_user_prompt = r"""You are an advanced visual reasoning AI specialized in analyzing images. Your task is to examine images containing simple geometric shapes and answer questions about their attributes and relationships.
+        rollout_user_prompt = r"""You are an advanced visual reasoning AI specialized in analyzing images for the Visual Question Answering (VQA) task. Your objective is to examine images containing various objects, scenes, and geometric shapes, and answer questions about their attributes, relationships, and spatial arrangements.
 
 You will be provided with:
 
-1. An image containing geometric shapes (cubes, spheres, and cylinders) with various attributes (colors, sizes, materials) and spatial relationships.
+1. An image containing various elements, which may include geometric shapes (such as cubes, spheres, and cylinders), objects, scenes, and their spatial relationships.
 2. A question about the contents of the image.
 
 Here is the question you need to answer:
@@ -131,13 +131,15 @@ Here is the question you need to answer:
 Please follow these steps to complete the task:
 
 1. Carefully examine the image, paying attention to:
-   - Types of shapes present (cubes, spheres, cylinders)
-   - Attributes of each shape (color, size, material)
-   - Spatial relationships between shapes
+   - Objects and scenes present
+   - Geometric shapes (if any)
+   - Attributes of each element (color, size, material, texture, etc.)
+   - Spatial relationships between elements
+   - Any text or numbers visible in the image
 
-2. Read and understand the question, identifying the type of reasoning required (counting, existence, comparison, or attribute query).
+2. Analyze the question to identify the type of reasoning required (e.g., counting, existence check, comparison, attribute query, or relationship assessment).
 
-3. Analyze the image in relation to the question, focusing on relevant shapes and attributes.
+3. Conduct a thorough visual analysis of the image in relation to the question, focusing on relevant elements and attributes.
 
 4. Formulate your answer based on your analysis.
 
