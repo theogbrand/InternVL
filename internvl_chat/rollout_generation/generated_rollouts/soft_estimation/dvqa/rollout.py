@@ -10,7 +10,6 @@ import signal
 from datetime import datetime
 from mimetypes import guess_type
 from collections import defaultdict
-from internvl_chat.rollout_generation.generated_rollouts.soft_estimation.RAVEN.verification import prompts
 import torch
 from PIL import Image
 from openai import AzureOpenAI
@@ -29,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 # Initialize logger early to avoid NameError issues
-logger = logging.getLogger('raven_rollout')
+logger = logging.getLogger('dvqa_rollout')
 
 # Add the tools directory to the path
 sys.path.append('/data/users/brandon/ob1-projects/InternVL/internvl_chat/tools')
@@ -39,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://dalle-declare.openai.azure.com/"
-deployment = "gpt-4.1"
+endpoint = "https://research.openai.azure.com/"
+deployment = "gpt-4.1-2"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -50,12 +49,8 @@ client = AzureOpenAI(
     timeout=60.0,  # 60 second timeout
 )
 
-# Simple rate limiting - no complex tracking needed since we use time-based batch firing
-
 # Global shutdown flag for graceful termination
 shutdown_flag = threading.Event()
-
-
 
 def signal_handler(signum, frame):
     """Handle termination signals gracefully"""
@@ -120,11 +115,79 @@ class DVQA_V1_INT_ONLYDataset(torch.utils.data.Dataset):
         answer = item['answer']
         uid = item['uid']
         
-        rollout_user_prompt = prompts.DVQA_V1_ROLLOUT_PROMPT.replace('{{QUESTION}}', question)
+        rollout_user_prompt = r"""You are an expert data analyst specializing in interpreting data visualizations. Your task is to answer questions about charts and graphs presented to you in images. You will be provided with an image containing one or more data visualizations and a specific question about the data presented.
+
+I will provide you with an image containing:
+- Data Visualization: A chart or graph that contains data points and other visual elements.
+
+Here's the question you need to answer:
+
+<question>
+{{QUESTION}}
+</question>
+
+Please follow these steps to complete the task:
+
+1. Carefully examine the image, paying attention to all elements of the data visualization(s) such as titles, labels, axes, legends, and data points.
+
+2. Analyze the data presented in the visualization(s), identifying specific data points or trends that relate to the question asked.
+
+3. Interpret the data and connect it to the specific question asked. Consider how the data directly relates to answering the question.
+
+4. Use your analysis and interpretation to determine the answer to the question. The answer must be a single integer.
+
+5. Present your answer in a LaTeX-formatted box using this format: $\boxed{integer}$
+
+To ensure a thorough and accurate analysis, please structure your response as follows:
+
+[Visual Elements]
+Inside your thinking block, list out your step-by-step perception of the visual elements in the chart. Be thorough but concise. Wrap each element in <step> tags and prepend each with a number, counting up.
+
+[Analysis and Interpretation]
+Inside your thinking block, explain your step-by-step reasoning process. This should include your analysis, interpretation, and how you arrived at the answer. Provide a clear justification of how you derived the answer from the data presented. Consider multiple possible interpretations before settling on a final answer. Wrap each step in <step> tags.
+
+<correct_answer>
+Present your final answer here using the LaTeX-formatted box.
+</correct_answer>
+
+It is crucial that your solution contains these sections in the exact format described below:
+
+```
+[Visual Elements]
+<step_1>
+...(Step 1 of step-by-step perception)...
+</step_1>
+<step_2>
+...(Step 2 of step-by-step perception)...
+</step_2>
+...
+<step_n>
+...(Step n of step-by-step perception)...
+</step_n>
+
+[Analysis and Interpretation]
+<step_1>
+...(Step 1 of step-by-step reasoning)...
+</step_1>
+<step_2>
+...(Step 2 of step-by-step reasoning)...
+</step_2>
+...
+<step_m>
+...(Step m of step-by-step reasoning)...
+</step_m>
+
+<correct_answer>
+$\boxed{integer}$
+</correct_answer>
+```
+
+Important: Your output must strictly adhere to this format. Do not include any additional text or explanations outside of these sections. Your final output should consist only of the LaTeX-formatted box with the answer and should not duplicate or rehash any of the work you did in the thinking block.""".replace('{{QUESTION}}', question)
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
             'image': image_path,
+            'image_path': image_path, # to fix: backward compatibility
             'question': question,
             'answer': answer,
             'uid': uid,
@@ -155,7 +218,7 @@ def parse_response_to_perception_and_reasoning_steps_and_correct_answer(text, ma
     }
     
     # Extract perception steps
-    perception_pattern = r'\[Perception\](.*?)(?=\[Reasoning\]|\Z)'
+    perception_pattern = r'\[Visual Elements\](.*?)(?=\[Analysis and Interpretation\]|\Z)'
     perception_match = re.search(perception_pattern, text, re.DOTALL)
     
     if not perception_match:
@@ -173,7 +236,7 @@ def parse_response_to_perception_and_reasoning_steps_and_correct_answer(text, ma
     result['perception_steps'] = [step[1].strip() for step in perception_steps]
     
     # Extract reasoning steps
-    reasoning_pattern = r'\[Reasoning\](.*?)(?=<correct_answer>|\Z)'
+    reasoning_pattern = r'\[Analysis and Interpretation\](.*?)(?=<correct_answer>|\Z)'
     reasoning_match = re.search(reasoning_pattern, text, re.DOTALL)
     
     if not reasoning_match:
@@ -316,7 +379,6 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
             ]
             
             messages = [
-                {"role": "system", "content": "You are a helpful assistant that excels at visual reasoning and pattern recognition."},
                 {"role": "user", "content": content}
             ]
             
@@ -471,13 +533,13 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
                         'mc_idx': mc_idx,
                         'input_data': input_data,
                         'prefix': prefix,
-                        'answer_gt': item['correct_answer'],
+                        'answer_gt': item['answer'],
                         'task_id': task_id
                     })
                     
                     # Debug log for first few MC tasks
                     if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5) and mc_idx == 0:
-                        logger.debug(f"MC TASK {task_id}: GT Answer = {item['correct_answer']}")
+                        logger.debug(f"MC TASK {task_id}: GT Answer = {item['answer']}")
             
             parsing_stats['success'] += 1
             if rollout_idx < 3:  # Log first few successfully parsed rollouts
@@ -650,7 +712,7 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
     if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5):
         logger.debug(f"BUILDING OUTPUT FOR ROLLOUT {rollout_idx}:")
         logger.debug(f"  Total steps: {len(rollout_meta['steps'])}")
-        logger.debug(f"  GT Answer: {rollout_meta['item']['correct_answer']}")
+        logger.debug(f"  GT Answer: {rollout_meta['item']['answer']}")
     
     for step_idx in range(len(rollout_meta['steps'])):
         # Collect MC results for this step
@@ -661,12 +723,12 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
             mc_response = rollout_meta['mc_results'].get((step_idx, mc_idx), "")
             
             try:
-                parsed_answer = parse_answer(mc_response, prompt_version=args.get('prompt_version', 'raven_v1'))
+                parsed_answer = parse_answer(mc_response, prompt_version=args.get('prompt_format_version', ''))
                 answer_pred = parsed_answer[-1]
                 correctness = check_answer(
                     answer_pred=answer_pred,
-                    answer_gt=str(rollout_meta['item']['correct_answer']),
-                    mode='raven_score'
+                    answer_gt=str(rollout_meta['item']['answer']),
+                    mode=args.get('scoring_mode', '')
                 )
                 mc_details.append(f"MC{mc_idx}: {answer_pred} -> {correctness}")
             except Exception as e:
@@ -830,13 +892,14 @@ args = {
     'endpoint': endpoint,
     'deployment': deployment,
     'api_version': api_version,
-    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/distribute_nine_train.jsonl',
-    'out_dir': 'raven_rollouts_output',
-    'batch_size': 20,  # 125 samples per batch
-    'num_return_sequences': 4,  # 20×4 = 80 requests per batch (conservative RPM utilization)
-    'sample_start_idx': 8000,
-    'sample_end_idx': 9999,
-    'prompt_version': 'raven_v1',
+    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/DVQA/subset_jsonl/dvqa_run1_int_only.jsonl',
+    'out_dir': 'dvqa_int_rollouts_output',
+    'batch_size': 14,  # 125 samples per batch
+    'num_return_sequences': 6,  # 20×4 = 80 requests per batch (conservative RPM utilization)
+    'sample_start_idx': 0,
+    'sample_end_idx': 681,
+    'prompt_format_version': 'dvqa_v1',
+    'scoring_mode': 'dvqa_int_only_score',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
@@ -859,8 +922,12 @@ def main():
 
     # Setup logging
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_filename = f"raven_rollout_{timestamp}_samples_{args['sample_start_idx']}_{args['sample_end_idx']}.log"
-    log_filepath = os.path.join(args['out_dir'], log_filename)
+    
+    logs_dir = os.path.join(args['out_dir'], f"{args['dataset_name']}_rollout_logs")
+    os.makedirs(logs_dir, exist_ok=True)
+
+    log_filename = f"{args['dataset_name']}_rollout_{timestamp}_samples_{args['sample_start_idx']}_{args['sample_end_idx']}.txt"
+    log_filepath = os.path.join(logs_dir, log_filename)
 
     # Configure the logger (already created at top of file)
     logger.setLevel(logging.DEBUG)  # Allow all levels to reach handlers
@@ -921,12 +988,12 @@ def main():
     if is_terminal:
         progress_bar = tqdm(
             range(len(dataset)), 
-            desc=f"Processing RAVEN samples (ID range {args['sample_start_idx']} to {args['sample_end_idx']})",
+            desc=f"Processing {args['dataset_name']} samples (ID range {args['sample_start_idx']} to {args['sample_end_idx']})",
             unit="sample"
         )
     else:
         progress_bar = None
-        logger.info(f"Processing {len(dataset)} RAVEN samples (ID range {args['sample_start_idx']} to {args['sample_end_idx']})")
+        logger.info(f"Processing {len(dataset)} {args['dataset_name']} samples (ID range {args['sample_start_idx']} to {args['sample_end_idx']})")
 
     current_sample = 0
 
@@ -1005,7 +1072,7 @@ def main():
             if sample_idx == 0:
                 logger.info(f"\n[{localtime()}] First sample processing details:")
                 logger.info(f"Image path: {sample['image_path']}")
-                logger.info(f"Correct answer: {sample['item']['correct_answer']}")
+                logger.info(f"Correct answer: {sample['item']['answer']}")
                 logger.info(f"Batch processing time: {batch_duration:.2f} seconds")
                 logger.info(f"Average sample time: {avg_sample_time:.2f} seconds")
                 logger.info(f"Outputs saved incrementally via streaming pipeline")

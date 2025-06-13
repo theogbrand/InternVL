@@ -538,6 +538,10 @@ def check_answer(answer_pred, answer_gt, mode):
     # if (answer_pred, answer_gt) in evaluator_cache:
     #     accuracy = evaluator_cache[(answer_pred, answer_gt)]
 
+    # throw error if mode not specified
+    if mode is None:
+        raise ValueError(f"Mode not specified for answer_pred: {answer_pred}, answer_gt: {answer_gt}")
+
     if answer_pred.lower() == answer_gt.lower():
         return 1
 
