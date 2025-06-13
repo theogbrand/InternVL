@@ -77,9 +77,9 @@ $\\boxed{789}$
 def test_boxed_integer_with_newlines():
     """Test extraction with newlines between tags and content"""
     input_text = """<correct_answer>
-$\\boxed{2}$
+$\\boxed{1}$
 </correct_answer>"""
-    assert extract_dvqa_answer_int_from_xml(input_text) == "2"
+    assert extract_dvqa_answer_int_from_xml(input_text) == "1"
 
 def test_boxed_integer_with_multiple_newlines():
     """Test extraction with multiple newlines and spaces"""

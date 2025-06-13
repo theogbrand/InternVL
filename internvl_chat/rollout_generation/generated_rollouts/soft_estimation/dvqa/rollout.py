@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://dalle-declare.openai.azure.com/"
-deployment = "gpt-4.1"
+endpoint = "https://research.openai.azure.com/"
+deployment = "gpt-4.1-2"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -84,7 +84,7 @@ class DVQA_V1_INT_ONLYDataset(torch.utils.data.Dataset):
         sample_end_idx=None,
     ):
         self.data = []
-        total_lines = 0
+        total_lines = 0 # it is 1-indexed for this dataset since we are using line numbers
         
         with open(data, 'r', encoding='utf-8') as file:
             for line in file:
@@ -134,21 +134,14 @@ Please follow these steps to complete the task:
 
 3. Interpret the data and connect it to the specific question asked. Consider how the data directly relates to answering the question.
 
-4. Use your analysis and interpretation to determine the answer to the question. The answer must be a single integer.
+4. Reason through your analysis and interpretation to determine the answer to the question. The answer must be a single integer.
 
-5. Present your answer in a LaTeX-formatted box using this format: $\boxed{integer}$
+5. Present your answer in a LaTeX-formatted box using this format: `<correct_answer>\n$\boxed{integer}$\n</correct_answer>`.
 
-To ensure a thorough and accurate analysis, please structure your response as follows:
-
-[Visual Elements]
-Inside your thinking block, list out your step-by-step perception of the visual elements in the chart. Be thorough but concise. Wrap each element in <step> tags and prepend each with a number, counting up.
-
-[Analysis and Interpretation]
-Inside your thinking block, explain your step-by-step reasoning process. This should include your analysis, interpretation, and how you arrived at the answer. Provide a clear justification of how you derived the answer from the data presented. Consider multiple possible interpretations before settling on a final answer. Wrap each step in <step> tags.
-
-<correct_answer>
-Present your final answer here using the LaTeX-formatted box.
-</correct_answer>
+Your task is to: 
+- Under the [Visual Elements] section of your thinking block, list out your step-by-step perception of the visual elements in the chart. Be thorough but concise. Wrap each element in <step> tags and prepend each with a number, counting up.
+- Under the [Reasoning] section of your thinking block, explain your step-by-step reasoning process. This should include your analysis, interpretation, and how you arrived at the answer. Provide a clear justification of how you derived the answer from the data presented. Wrap each step in <step> tags and prepend each with a number, counting up.
+- Present your final answer using the LaTeX-formatted box in `<correct_answer>` tags.
 
 It is crucial that your solution contains these sections in the exact format described below:
 
@@ -165,7 +158,7 @@ It is crucial that your solution contains these sections in the exact format des
 ...(Step n of step-by-step perception)...
 </step_n>
 
-[Analysis and Interpretation]
+[Reasoning]
 <step_1>
 ...(Step 1 of step-by-step reasoning)...
 </step_1>
@@ -218,7 +211,7 @@ def parse_response_to_perception_and_reasoning_steps_and_correct_answer(text, ma
     }
     
     # Extract perception steps
-    perception_pattern = r'\[Visual Elements\](.*?)(?=\[Analysis and Interpretation\]|\Z)'
+    perception_pattern = r'\[Visual Elements\](.*?)(?=\[Reasoning\]|\Z)'
     perception_match = re.search(perception_pattern, text, re.DOTALL)
     
     if not perception_match:
@@ -236,7 +229,7 @@ def parse_response_to_perception_and_reasoning_steps_and_correct_answer(text, ma
     result['perception_steps'] = [step[1].strip() for step in perception_steps]
     
     # Extract reasoning steps
-    reasoning_pattern = r'\[Analysis and Interpretation\](.*?)(?=<correct_answer>|\Z)'
+    reasoning_pattern = r'\[Reasoning\](.*?)(?=<correct_answer>|\Z)'
     reasoning_match = re.search(reasoning_pattern, text, re.DOTALL)
     
     if not reasoning_match:
@@ -512,7 +505,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
                     formatted_prefix += "[Visual Elements]\n"
                     for i, step in enumerate(steps['perception_steps']):
                         formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
-                    formatted_prefix += "\n[Analysis and Interpretation]\n"
+                    formatted_prefix += "\n[Reasoning]\n"
                     reasoning_steps = prefix_steps[perception_count:]
                     for i, step in enumerate(reasoning_steps):
                         formatted_prefix += f"<step_{i+1}>\n{step}\n</step_{i+1}>\n"
@@ -896,8 +889,8 @@ args = {
     'out_dir': 'dvqa_int_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 6,  # 20×4 = 80 requests per batch (conservative RPM utilization)
-    'sample_start_idx': 0,
-    'sample_end_idx': 2,
+    'sample_start_idx': 683,
+    'sample_end_idx': 1364,
     'prompt_format_version': 'dvqa_v1_int_only',
     'scoring_mode': 'dvqa_int_only_score',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
