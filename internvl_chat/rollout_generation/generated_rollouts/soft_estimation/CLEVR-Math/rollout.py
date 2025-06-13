@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 # Initialize logger early to avoid NameError issues
-logger = logging.getLogger('dvqa_rollout')
+logger = logging.getLogger('clevr_rollout')
 
 # Add the tools directory to the path
 sys.path.append('/data/users/brandon/ob1-projects/InternVL/internvl_chat/tools')
@@ -76,7 +76,7 @@ def local_image_to_data_url(image_path):
     # Construct the data URL
     return f"data:{mime_type};base64,{base64_encoded_data}"
 
-class DVQA_V1_INT_ONLYDataset(torch.utils.data.Dataset):
+class CLEVR_V1_INT_ONLYDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         data,
@@ -109,7 +109,7 @@ class DVQA_V1_INT_ONLYDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         item = json.loads(self.data[idx])
         
-        # DVQA dataset structure: image, question, answer, uid, image_path
+        # CLEVR dataset structure: image, question, answer, uid, image_path
         image_path = item['image_path']
         question = item['question']
         answer = item['answer']
@@ -147,8 +147,8 @@ Please follow these steps to complete the task:
    </correct_answer>
 
 Your task is to: 
-- Under the [Visual Elements] section of your thinking block, list out your step-by-step perception of the visual elements in the image. Be thorough but concise. Wrap each element in <step> tags and prepend each with a number, counting up.
-- Under the [Reasoning] section of your thinking block, explain your step-by-step reasoning process. This should include your analysis, interpretation, and how you arrived at the answer. Provide a clear justification of how you derived the answer from the data presented. Wrap each step in <step> tags and prepend each with a number, counting up.
+- Under the [Visual Elements] section of your thinking block, list out your step-by-step perception of the visual elements in the image. Be thorough but concise. Wrap each element in <step> tags and suffix each with a number, counting up.
+- Under the [Reasoning] section of your thinking block, explain your step-by-step reasoning process. This should include your analysis, interpretation, and how you arrived at the answer. Provide a clear justification of how you derived the answer from the data presented. Wrap each step in <step> tags and suffix each with a number, counting up.
 - Present your final answer using the LaTeX-formatted box in `<correct_answer>` tags.
 
 It is crucial that your solution contains these sections in the exact format described below:
@@ -183,7 +183,11 @@ $\boxed{integer}$
 </correct_answer>
 ```
 
-Remember, your final output should consist only of the LaTeX-formatted box with the answer. Do not include any additional text or explanations outside of the [Visual Elements], [Reasoning], and <correct_answer> sections. Do not duplicate or rehash any of the work you did in the thinking block.""".replace('{{QUESTION}}', question)
+Remember to:
+- List all visual observations in the [Visual Elements] section using numbered <step_n> tags
+- Explain your complete reasoning process in the [Reasoning] section using numbered <step_m> tags  
+- Provide only an integer answer in the <correct_answer> section using the $\boxed{integer}$ format
+- Include only these three sections in your response, with no additional commentary.""".replace('{{QUESTION}}', question)
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
@@ -963,7 +967,7 @@ def main():
     logger.info(f"Log file: {log_filepath}")
 
     # Load and process RAVEN dataset
-    dataset = DVQA_V1_INT_ONLYDataset(
+    dataset = CLEVR_V1_INT_ONLYDataset(
         data=args['prompt_path'],
         sample_start_idx=args['sample_start_idx'],
         sample_end_idx=args['sample_end_idx'],
