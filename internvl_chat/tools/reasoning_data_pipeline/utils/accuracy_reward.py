@@ -399,7 +399,7 @@ def dvqa_int_only_score(answer_pred, answer_gt):
         return 0
     
 def vqav2_num_str_only_score(answer_pred, answer_gt):
-    """Exact string match for VQAv2 dataset, preserving leading zeros and numeric format"""
+    """Exact string match for VQAv2 dataset, preserving leading zeros"""
     answer_pred = answer_pred.strip()
     answer_gt = answer_gt.strip()
     
@@ -407,10 +407,12 @@ def vqav2_num_str_only_score(answer_pred, answer_gt):
     answer_pred = answer_pred.replace(' -', '-').replace('- ', '-')
     answer_gt = answer_gt.replace(' -', '-').replace('- ', '-')
     
-    # Verify both are valid numeric strings
+    # Verify both are valid integers and match exactly
     try:
         int(answer_pred)
         int(answer_gt)
+        # Then do exact string comparison to preserve leading zeros
+        return answer_pred == answer_gt
     except ValueError:
         return 0
 
@@ -473,7 +475,7 @@ def extract_answer_from_box(ans):
         # Unbalanced braces
         return ans
 
-    content = ans[content_start:i]
+    content = ans[content_start:i].strip()  # Strip whitespace from content
     return content
 
 
@@ -605,6 +607,9 @@ def check_answer(answer_pred, answer_gt, mode):
 
     if 'dvqa_int_only_score' in mode:
         accuracy = max(accuracy, dvqa_int_only_score(answer_pred, answer_gt))
+    
+    if 'vqav2_num_str_only_score' in mode:
+        accuracy = max(accuracy, vqav2_num_str_only_score(answer_pred, answer_gt))
 
     accuracy = int(accuracy > 0.9)
     # evaluator_cache[(answer_pred, answer_gt)] = accuracy

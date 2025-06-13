@@ -3,7 +3,7 @@ import sys
 
 sys.path.append('/data/users/brandon/ob1-projects/InternVL/internvl_chat/tools')
 
-from reasoning_data_pipeline.utils.accuracy_reward import extract_dvqa_answer_int_from_xml, check_answer
+from reasoning_data_pipeline.utils.accuracy_reward import extract_dvqa_answer_int_from_xml, check_answer, extract_answer_from_box
 
 def test_valid_boxed_integer():
     """Test extraction of valid boxed integer answer"""
@@ -18,9 +18,9 @@ def test_multiple_boxed_integers():
     """Test extraction when multiple boxed integers exist"""
     input_text = """$\\boxed{123}$
 <correct_answer>
-$\\boxed{456}$
+$\\boxed{03930}$
 </correct_answer>"""
-    assert extract_dvqa_answer_int_from_xml(input_text) == "456"
+    assert extract_dvqa_answer_int_from_xml(input_text) == "03930"
 
 def test_no_boxed_integer():
     """Test when no boxed integer pattern is found"""
@@ -137,17 +137,18 @@ $\\boxed{42}$
     extracted = extract_dvqa_answer_int_from_xml(input_text)
     assert check_answer(extracted, "42", "vqav2_num_str_only_score") == 1
 
-
 def test_dvqa_int_only_score_with_leading_zeros():
     """Test DVQA scoring with leading zeros handling"""
     input_text = """<correct_answer>
- $\\boxed{0042}$
+ $\\boxed{
+   0042
+   }$
 </correct_answer>"""
     extracted = extract_dvqa_answer_int_from_xml(input_text)
     assert check_answer(extracted, "0042", "vqav2_num_str_only_score") == 1
 
     input_text = """<correct_answer>
-$\\boxed{42000}$
+$\\boxed{ 42000 }$
 </correct_answer>"""
     extracted = extract_dvqa_answer_int_from_xml(input_text)
     assert check_answer(extracted, "42000", "vqav2_num_str_only_score") == 1
@@ -185,3 +186,31 @@ def test_boxed_integer_with_trailing_zeros():
 $\\boxed{09123000}$
 </correct_answer>"""
     assert extract_dvqa_answer_int_from_xml(input_text) == "09123000"
+
+def test_latex_content_extraction_with_whitespace():
+    """Test LaTeX content extraction with various whitespace patterns"""
+    # Test simple integer with spaces
+    test_cases = [
+        (r'\boxed{ 42 }', '42'),  # Spaces on both sides
+        (r'\boxed{42 }', '42'),   # Space after
+        (r'\boxed{ 42}', '42'),   # Space before
+        (r'\boxed{42}', '42'),    # No spaces
+        (r'\boxed{  \frac{1}{2}  }', r'\frac{1}{2}'),  # Complex LaTeX with spaces
+        (r'\boxed{ x^2 + 2x + 1 }', 'x^2 + 2x + 1'),   # Quadratic with spaces
+        (r'\boxed{  \frac{1}{2} + \frac{1}{3}  }', r'\frac{1}{2} + \frac{1}{3}'),  # Multiple fractions
+    ]
+
+    for input_text, expected in test_cases:
+        extracted = extract_answer_from_box(input_text)
+        assert extracted == expected, f"Failed for input: {input_text}\nExpected: {expected}\nGot: {extracted}"
+
+    # Test with newlines
+    newline_cases = [
+        ('\\boxed{\n42\n}', '42'),
+        ('\\boxed{\n\\frac{1}{2}\n}', '\\frac{1}{2}'),
+        ('\\boxed{\nx^2 + 2x + 1\n}', 'x^2 + 2x + 1'),
+    ]
+
+    for input_text, expected in newline_cases:
+        extracted = extract_answer_from_box(input_text)
+        assert extracted == expected, f"Failed for input with newlines: {input_text}\nExpected: {expected}\nGot: {extracted}"

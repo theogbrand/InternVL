@@ -115,11 +115,11 @@ class VQAv2_V1_INT_ONLYDataset(torch.utils.data.Dataset):
         answer = item['answer']
         uid = item['uid']
         
-        rollout_user_prompt = r"""You are an advanced visual reasoning AI specialized in analyzing images for the Visual Question Answering (VQA) task. Your objective is to examine images containing various objects, scenes, and geometric shapes, and answer questions about their attributes, relationships, and spatial arrangements.
+        rollout_user_prompt = r"""You are an advanced visual reasoning AI specialized in analyzing images for the Visual Question Answering (VQA) task. Your objective is to examine images containing various objects, scenes, geometric shapes, and potentially text or numbers, and answer questions about their attributes, relationships, and spatial arrangements.
 
 You will be provided with:
 
-1. An image containing various elements, which may include geometric shapes (such as cubes, spheres, and cylinders), objects, scenes, and their spatial relationships.
+1. An image containing various elements, which may include geometric shapes (such as cubes, spheres, and cylinders), objects, scenes, and their spatial relationships, as well as text or numbers.
 2. A question about the contents of the image.
 
 Here is the question you need to answer:
@@ -135,7 +135,7 @@ Please follow these steps to complete the task:
    - Geometric shapes (if any)
    - Attributes of each element (color, size, material, texture, etc.)
    - Spatial relationships between elements
-   - Any text or numbers visible in the image
+   - Any text or numbers visible in the image (read and interpret these carefully)
 
 2. Analyze the question to identify the type of reasoning required (e.g., counting, existence check, comparison, attribute query, or relationship assessment).
 
@@ -143,9 +143,9 @@ Please follow these steps to complete the task:
 
 4. Formulate your answer based on your analysis.
 
-5. Present your final answer as a single integer in a LaTeX-formatted box using this format: 
+5. Present your final answer as a single numeric string in a LaTeX-formatted box using this format: 
    <correct_answer>
-   $\boxed{integer}$
+   $\boxed{numeric_string}$
    </correct_answer>
 
 Your task is to: 
@@ -181,14 +181,14 @@ It is crucial that your solution contains these sections in the exact format des
 </step_m>
 
 <correct_answer>
-$\boxed{integer}$
+$\boxed{numeric_string}$
 </correct_answer>
 ```
 
 Remember to:
 - List all visual observations in the [Visual Elements] section using numbered <step_1>, <step_2>, ... tags.
 - Explain your complete reasoning process in the [Reasoning] section using numbered <step_1>, <step_2>, ... tags.
-- Provide only an integer answer in the <correct_answer> section using the $\boxed{integer}$ format
+- Provide only an numeric string answer in the <correct_answer> section using the $\boxed{numeric_string}$ format
 - Include only these three sections in your response, with no additional commentary.""".replace('{{QUESTION}}', question)
 
         return {
@@ -906,7 +906,7 @@ args = {
     'sample_start_idx': 1, # for line-based idx, start from 1-indexed
     'sample_end_idx': 800,
     'prompt_format_version': 'dvqa_v1_int_only', # dvqa_v1_int_only reused for integer-only, exact match. Includes negative number matching
-    'scoring_mode': 'dvqa_int_only_score',
+    'scoring_mode': 'vqav2_num_str_only_score',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
