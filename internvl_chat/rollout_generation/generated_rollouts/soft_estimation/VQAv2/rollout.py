@@ -186,10 +186,7 @@ $\boxed{numeric_string}$
 ```
 
 Remember to:
-- List all visual observations in the [Visual Elements] section using numbered <step_1>, <step_2>, ... tags.
-- Explain your complete reasoning process in the [Reasoning] section using numbered <step_1>, <step_2>, ... tags.
-- Provide only an numeric string answer in the <correct_answer> section using the $\boxed{numeric_string}$ format
-- Include only these three sections in your response, with no additional commentary.""".replace('{{QUESTION}}', question)
+- Provide only an numeric string answer in the <correct_answer> section using the $\boxed{numeric_string}$ format, and no other text or commentary.""".replace('{{QUESTION}}', question)
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
