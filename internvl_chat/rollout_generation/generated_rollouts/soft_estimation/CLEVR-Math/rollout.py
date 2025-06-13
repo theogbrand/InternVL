@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbncunfi-australiaeast.cognitiveservices.azure.com/"
-deployment = "gpt-4.1"
+endpoint = "https://decla-mbnd12sy-westeurope.cognitiveservices.azure.com/"
+deployment = "gpt-4.1-8"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -586,14 +586,14 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"  Estimated time: {math.ceil(total_mc_tasks/900)*60:.0f} seconds")
     
     # Step 2: Process MC tasks with time-based firing + streaming completion tracking
-    batch_size = 500  # Reduced to 500 RPM for less aggressive rate limiting
-    all_batches = [mc_task_queue[i:i+batch_size] for i in range(0, total_mc_tasks, batch_size)]
+    throughput_batch_size = 500  # adjust so each batch takes about 1 minute (which maximizes the 1M TPM)
+    all_batches = [mc_task_queue[i:i+throughput_batch_size] for i in range(0, total_mc_tasks, throughput_batch_size)]
     
     # Output file for streaming saves
     output_file = os.path.join(args['out_dir'], f'{args["dataset_name"]}_raven_rollouts_{args["sample_start_idx"]}_{args["sample_end_idx"]}_streaming.jsonl')
     completed_rollouts = 0
     
-    logger.info(f"Starting time-based MC processing with streaming saves (500 RPM rate limit)")
+    logger.info(f"Starting time-based MC processing with streaming saves ({throughput_batch_size} RPM rate limit)")
     start_time = time.time()
     
     # Open output file immediately for true streaming (append mode to preserve existing rollouts)
@@ -601,7 +601,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = []
             
-            # Fire batches every 60 seconds to maintain 500 RPM throughput
+            # Fire batches every 60 seconds to maintain throughput_batch_size RPM throughput
             for batch_idx, batch_tasks in enumerate(all_batches):
                 fire_time = start_time + batch_idx * 60.0
                 current_time = time.time()
@@ -702,7 +702,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"STREAMING MC Pipeline Completed:")
     logger.info(f"  Total MC tasks: {total_mc_tasks}")
     logger.info(f"  Completed rollouts: {completed_rollouts}/{total_rollouts}")
-    logger.info(f"  Duration: {total_duration:.0f}s ({actual_rate:.0f} tasks/min, target: 500 RPM)")
+    logger.info(f"  Duration: {total_duration:.0f}s ({actual_rate:.0f} tasks/min, target: {throughput_batch_size} RPM)")
     logger.info(f"  Saved to: {output_file}")
     
     # Return empty list since we saved incrementally
@@ -900,9 +900,9 @@ args = {
     'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/CLEVR-MATH/prepared_jsonl/CLEVR_run1_int_only.jsonl',
     'out_dir': 'clevr_int_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
-    'num_return_sequences': 6,  # 20×4 = 80 requests per batch (conservative RPM utilization)
-    'sample_start_idx': 683,
-    'sample_end_idx': 1364,
+    'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
+    'sample_start_idx': 1365,
+    'sample_end_idx': 2046,
     'prompt_format_version': 'dvqa_v1_int_only',
     'scoring_mode': 'dvqa_int_only_score',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
