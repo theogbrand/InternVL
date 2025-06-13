@@ -147,9 +147,9 @@ Please follow these steps to complete the task:
    </correct_answer>
 
 Your task is to: 
-- Under the [Visual Elements] section of your thinking block, list out your step-by-step perception of the visual elements in the image. Be thorough but concise. Wrap each element in <step> tags and suffix each with a number, counting up.
-- Under the [Reasoning] section of your thinking block, explain your step-by-step reasoning process. This should include your analysis, interpretation, and how you arrived at the answer. Provide a clear justification of how you derived the answer from the data presented. Wrap each step in <step> tags and suffix each with a number, counting up.
-- Present your final answer using the LaTeX-formatted box in `<correct_answer>` tags.
+- Under the [Visual Elements] section, list out your step-by-step perception of the visual elements in the image. Be thorough but concise. Wrap each step in <step_1>, <step_2>, ... tags.
+- Under the [Reasoning] section, explain your step-by-step reasoning process. This should include your analysis, interpretation, and how you arrived at the answer. Provide a clear justification of how you derived the answer from the data presented. Wrap each step in <step_1>, <step_2>, ... tags.
+- Present your final answer using the LaTeX-formatted box in `<correct_answer>` tags. 
 
 It is crucial that your solution contains these sections in the exact format described below:
 
@@ -184,8 +184,8 @@ $\boxed{integer}$
 ```
 
 Remember to:
-- List all visual observations in the [Visual Elements] section using numbered <step_n> tags
-- Explain your complete reasoning process in the [Reasoning] section using numbered <step_m> tags  
+- List all visual observations in the [Visual Elements] section using numbered <step_1>, <step_2>, ... tags.
+- Explain your complete reasoning process in the [Reasoning] section using numbered <step_1>, <step_2>, ... tags.
 - Provide only an integer answer in the <correct_answer> section using the $\boxed{integer}$ format
 - Include only these three sections in your response, with no additional commentary.""".replace('{{QUESTION}}', question)
 
