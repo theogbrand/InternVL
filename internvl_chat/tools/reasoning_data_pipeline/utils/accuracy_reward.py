@@ -394,7 +394,7 @@ def parse_answer(response, prompt_version):
     if prompt_version == 'raven_v1':
         return None, extract_raven_choices_answer_from_xml(response)
     if prompt_version == 'dvqa_v1':
-        return None, extract_dvqa_answer_from_xml(response)
+        return None, extract_dvqa_answer_int_from_xml(response)
     raise NotImplementedError(f'Unsupported prompt_version: {prompt_version}')
 
 
@@ -518,23 +518,10 @@ def extract_dvqa_answer_int_from_xml(ans):
     assert end_tag in ans, f'Missing closing tag {end_tag}: {ans}'
     assert ans.count(start_tag) == ans.count(end_tag), f'Mismatched XML tags: {ans.count(start_tag)} opening vs {ans.count(end_tag)} closing'
     
-    # For DVQA: extract numeric answer from potentially verbose content
-    # Look for patterns like "(1)", "1.", or standalone digits
-    
-    # Try to find standalone digit (1-8 for RAVEN)
-    digit_match = re.search(r'\b([1-8])\b', content) # TODO: change to 1-1000
-    if digit_match:
-        return digit_match.group(1)
-    
-    # Try to find digit in parentheses like "(1)"
-    paren_match = re.search(r'\(([1-8])\)', content)
-    if paren_match:
-        return paren_match.group(1)
-    
-    # Try to find digit followed by period like "1."
-    period_match = re.search(r'\b([1-8])\.\s', content)
-    if period_match:
-        return period_match.group(1)
+    # Look for LaTeX boxed integer pattern with $ delimiters
+    boxed_match = re.search(r'\$\\boxed{(\d+)}\$', content)
+    if boxed_match:
+        return boxed_match.group(1)
     
     # If no pattern found, return original content
     return content
