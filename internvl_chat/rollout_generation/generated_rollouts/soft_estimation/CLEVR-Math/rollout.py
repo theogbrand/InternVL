@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbnchwiq-northcentralus.cognitiveservices.azure.com/"
-deployment = "gpt-4.1-5"
+endpoint = "https://decla-mbncoo50-francecentral.cognitiveservices.azure.com/"
+deployment = "gpt-4.1-6"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -893,12 +893,12 @@ args = {
     'endpoint': endpoint,
     'deployment': deployment,
     'api_version': api_version,
-    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/DVQA/subset_jsonl/dvqa_run1_int_only.jsonl',
-    'out_dir': 'dvqa_int_rollouts_output',
+    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/CLEVR-MATH/prepared_jsonl/CLEVR_run1_int_only.jsonl',
+    'out_dir': 'clevr_int_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 6,  # 20×4 = 80 requests per batch (conservative RPM utilization)
-    'sample_start_idx': 2729,
-    'sample_end_idx': 3410,
+    'sample_start_idx': 1,
+    'sample_end_idx': 682,
     'prompt_format_version': 'dvqa_v1_int_only',
     'scoring_mode': 'dvqa_int_only_score',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
