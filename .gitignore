@@ -190,3 +190,5 @@ internvl_chat/rollout_generation/generated_rollouts/soft_estimation/CLEVR-Math/c
 internvl_chat/rollout_generation/generated_rollouts/soft_estimation/dvqa/dvqa_int_rollouts_output/*
 internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/VQAv2/subset_images/*
 internvl_chat/rollout_generation/generated_rollouts/soft_estimation/VQAv2/vqav2_int_rollouts_output/*
+internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/AI2D/subset_images/*
+internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/InfoVQA/subset_images/*
