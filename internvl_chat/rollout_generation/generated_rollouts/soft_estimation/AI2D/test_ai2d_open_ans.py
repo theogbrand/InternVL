@@ -22,6 +22,24 @@ from reasoning_data_pipeline.utils.accuracy_reward import (
 #     """Test extraction of valid boxed integer answer"""
 #     input_text = """Some text
 # <correct_answer>
+# $\boxed{\text{none of the above}}$
+# </correct_answer>
+# more text"""
+#     assert extract_dvqa_answer_int_from_xml(input_text) == "42"
+
+# def test_valid_boxed_integer():
+#     """Test extraction of valid boxed integer answer"""
+#     input_text = """Some text
+# <correct_answer>
+# $\boxed{man}$
+# </correct_answer>
+# more text"""
+#     assert extract_dvqa_answer_int_from_xml(input_text) == "42"
+
+# def test_valid_boxed_integer():
+#     """Test extraction of valid boxed integer answer"""
+#     input_text = """Some text
+# <correct_answer>
 # $\\boxed{42}$
 # </correct_answer>
 # more text"""

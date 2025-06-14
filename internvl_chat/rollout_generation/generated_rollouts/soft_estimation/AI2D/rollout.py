@@ -115,11 +115,11 @@ class AI2D_OPEN_ANSWER_Dataset(torch.utils.data.Dataset):
         answer = item['answer']
         uid = item['uid']
         
-        rollout_user_prompt = r"""You are an advanced visual reasoning AI specialized in analyzing images. Your task is to examine images containing simple geometric shapes and answer questions about their attributes and relationships.
+        rollout_user_prompt = r"""You are an advanced AI system specialized in Visual Question Answering (VQA) for grade-school science diagrams. Your primary focus is on understanding relationships between diagram elements and reasoning about processes or changes, not just identifying objects.
 
 You will be provided with:
 
-1. An image containing geometric shapes (cubes, spheres, and cylinders) with various attributes (colors, sizes, materials) and spatial relationships.
+1. An image containing grade-school science diagrams
 2. A question about the contents of the image.
 
 Here is the question you need to answer:
@@ -130,24 +130,31 @@ Here is the question you need to answer:
 
 Please follow these steps to complete the task:
 
-1. Carefully examine the image, paying attention to:
-   - Types of shapes present (cubes, spheres, cylinders)
-   - Attributes of each shape (color, size, material)
-   - Spatial relationships between shapes
+1. Analyze the diagram:
+- Identify and number all visible elements (objects, labels, arrows, etc.)
+- Determine relationships between elements
+- Interpret any text or numbers present
+- Consider any temporal or causal relationships in the diagram
+- State any assumptions you're making about the diagram
 
-2. Read and understand the question, identifying the type of reasoning required (counting, existence, comparison, or attribute query).
+2. Reason about the question:
+- Identify the type of relationship or process the question is asking about
+- Apply the required reasoning to the diagram elements
+- Detail any comparisons or sequence of events you considered
+- Show your step-by-step reasoning to arrive at the answer
 
-3. Analyze the image in relation to the question, focusing on relevant shapes and attributes.
+3. Complete your response:
+Your response should include all three components:
+- Your visual element analysis in the [Visual Elements] section
+- Your reasoning process in the [Reasoning] section
+- Your final answer in the format below:
 
-4. Formulate your answer based on your analysis.
-
-5. Present your final answer as a single integer in a LaTeX-formatted box using this format: 
-   <correct_answer>
-   $\boxed{integer}$
-   </correct_answer>
+<correct_answer>
+$\boxed{Your answer here}$
+</correct_answer>
 
 Your task is to: 
-- Under the [Visual Elements] section, list out your step-by-step perception of the visual elements in the image. Be thorough but concise. Wrap each step in <step_1>, <step_2>, ... tags.
+- Under the [Visual Elements] section, list out all relevant visual elements step-by-step that relate to answering the question. Be thorough but concise. Wrap each step in <step_1>, <step_2>, ... tags.
 - Under the [Reasoning] section, explain your step-by-step reasoning process. This should include your analysis, interpretation, and how you arrived at the answer. Provide a clear justification of how you derived the answer from the data presented. Wrap each step in <step_1>, <step_2>, ... tags.
 - Present your final answer using the LaTeX-formatted box in `<correct_answer>` tags. 
 
@@ -179,15 +186,17 @@ It is crucial that your solution contains these sections in the exact format des
 </step_m>
 
 <correct_answer>
-$\boxed{integer}$
+$\boxed{Your answer here}$
 </correct_answer>
 ```
 
-Remember to:
-- List all visual observations in the [Visual Elements] section using numbered <step_1>, <step_2>, ... tags.
-- Explain your complete reasoning process in the [Reasoning] section using numbered <step_1>, <step_2>, ... tags.
-- Provide only an integer answer in the <correct_answer> section using the $\boxed{integer}$ format
-- Include only these three sections in your response, with no additional commentary.""".replace('{{QUESTION}}', question)
+Important instructions:
+- Focus on understanding relationships and processes in the diagram, not just identifying objects
+- List all visual observations in the [Visual Elements] section using numbered <step_1>, <step_2>, ... tags
+- Explain your complete reasoning process in the [Reasoning] section using numbered <step_1>, <step_2>, ... tags
+- Your final answer should be concise and directly address the question
+- Place your answer within the LaTeX box format shown above
+- Do not include any explanation in the final answer section""".replace('{{QUESTION}}', question)
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
