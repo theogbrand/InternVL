@@ -1,8 +1,13 @@
 import re
-
+import os
+import base64
+from io import BytesIO
+from PIL import Image
+from openai import AzureOpenAI
 from sympy import latex
 from sympy.parsing.latex import parse_latex
 from tqdm import tqdm
+from pydantic import BaseModel, Field
 
 
 class EvalAIAnswerProcessor:
@@ -304,11 +309,11 @@ def relaxed_correctness(target: str,
 
     The correctness tolerates certain error ratio defined by max_relative_change.
     See https://arxiv.org/pdf/2203.10244.pdf, end of section 5.1:
-    “Following Methani et al. (2020), we use a relaxed accuracy measure for the
+    "Following Methani et al. (2020), we use a relaxed accuracy measure for the
     numeric answers to allow a minor inaccuracy that may result from the automatic
     data extraction process. We consider an answer to be correct if it is within
     5% of the gold answer. For non-numeric answers, we still need an exact match
-    to consider an answer to be correct.”
+    to consider an answer to be correct."
 
     Args:
       target: Target string.
@@ -415,6 +420,77 @@ def vqav2_num_str_only_score(answer_pred, answer_gt):
         return answer_pred == answer_gt
     except ValueError:
         return 0
+
+class AnswerAcceptability(BaseModel):
+    is_acceptable: str = Field(
+        description="Whether the predicted answer is acceptable given the ground truth answer",
+        enum=["0", "1"]
+    )
+
+def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=None):
+    """Use Azure OpenAI GPT-4.1-mini to judge if the answer is acceptable"""
+    client = AzureOpenAI(
+        api_version="2025-01-01-preview",
+        azure_endpoint="https://aisg-sj11.openai.azure.com/",
+        api_key=os.getenv("AZURE_CORRECTNESSJUDGE_API_KEY"),
+        timeout=60.0
+    )
+    
+    image_content = None
+    if image_path is not None:
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Image path does not exist: {image_path}")
+        if not os.access(image_path, os.R_OK):
+            raise PermissionError(f"No read permission for image: {image_path}")
+            
+        with open(image_path, 'rb') as f:
+            image_content = base64.b64encode(f.read()).decode('utf-8')
+    
+    messages = [
+        {
+            "role": "system",
+            "content": """You are an expert judge evaluating answers to questions about diagrams. Your task is to determine if the predicted answer is acceptable given the ground truth answer and the question asked. Consider three key aspects:
+1. Does the predicted answer correctly address the specific question asked?
+2. Is the predicted answer semantically equivalent to the ground truth answer?
+3. Does the predicted answer match the meaning and intent of the ground truth answer?
+
+IMPORTANT: If you are unsure about the answer's correctness or if the answer is ambiguous, consider it incorrect (return 0). Only return 1 if you are confident the answer is correct and unambiguous.
+
+SPELLING AND TYPOS: If the predicted answer has minor spelling mistakes or typos but is clearly semantically correct and matches the meaning of the ground truth answer, you can consider it correct (return 1). However, if the spelling mistakes significantly change the meaning or make the answer ambiguous, consider it incorrect (return 0)."""
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Question: {question}\nGround truth answer: {answer_gt}\nPredicted answer: {answer_pred}\n\nEvaluate if the predicted answer is acceptable by considering:\n1. Does it correctly answer the specific question asked?\n2. Is it semantically equivalent to the ground truth answer?\n3. Does it match the meaning and intent of the ground truth answer?"
+                }
+            ]
+        }
+    ]
+    
+    if image_content:
+        messages[1]["content"].append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/png;base64,{image_content}"
+            }
+        })
+    
+    try:
+        response = client.beta.chat.completions.parse(
+            messages=messages,
+            model="gpt-4.1-mini",
+            temperature=0.0,
+            max_tokens=10,
+            response_format=AnswerAcceptability
+        )
+        
+        result = response.choices[0].message.parsed.is_acceptable
+        return int(result) if result in ['0', '1'] else 0
+        
+    except Exception as e:
+        raise Exception(f"Error in AI2D answer scoring: {str(e)}")
 
 def parse_answer(response, prompt_version):
     if prompt_version in ['zh', 'en']:
