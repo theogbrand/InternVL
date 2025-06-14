@@ -156,7 +156,7 @@ def sample_image():
 )
 def test_ai2d_basic_text_only():
     """Test basic text-only scoring without image"""
-    result = ai2d_open_answer_score("The answer is 42", "The answer is 42")
+    result = ai2d_open_answer_score("The answer is 42", "The answer is 42", question="What is the answer?")
     assert result==1
 
 @pytest.mark.skipif(
@@ -169,13 +169,13 @@ def test_ai2d_with_image(sample_image, tmp_path):
     with open(image_path, 'wb') as f:
         f.write(sample_image.getvalue())
     
-    result = ai2d_open_answer_score("The answer is 42", "The answer is 42", str(image_path))
+    result = ai2d_open_answer_score("The answer is 42", "The answer is 42", str(image_path), question="What is the answer?")
     assert result==1
 
 def test_ai2d_invalid_image_path():
     """Test handling of invalid image path"""
     with pytest.raises(FileNotFoundError):
-        ai2d_open_answer_score("answer", "answer", "nonexistent.png")
+        ai2d_open_answer_score("answer", "answer", "nonexistent.png", question="What is the answer?")
 
 @pytest.mark.skipif(
     not os.getenv("AZURE_CORRECTNESSJUDGE_API_KEY"),
@@ -183,8 +183,8 @@ def test_ai2d_invalid_image_path():
 )
 def test_ai2d_empty_inputs():
     """Test handling of empty inputs"""
-    result = ai2d_open_answer_score("", "")
-    assert result==1
+    result = ai2d_open_answer_score("", "", question="What is the answer?")
+    assert result==0
 
 @pytest.mark.skipif(
     not os.getenv("AZURE_CORRECTNESSJUDGE_API_KEY"),
@@ -192,7 +192,7 @@ def test_ai2d_empty_inputs():
 )
 def test_ai2d_special_characters():
     """Test handling of special characters in answers"""
-    result = ai2d_open_answer_score("Answer: 42%", "Answer: 42%")
+    result = ai2d_open_answer_score("Answer: 42%", "Answer: 42%", question="What is the answer?")
     assert result==1
 
 @pytest.mark.skipif(
@@ -202,7 +202,7 @@ def test_ai2d_special_characters():
 def test_ai2d_long_inputs():
     """Test handling of long input strings"""
     long_answer = "a" * 1000
-    result = ai2d_open_answer_score(long_answer, long_answer)
+    result = ai2d_open_answer_score(long_answer, long_answer, question="What is the answer?")
     assert result==1
 
 @pytest.mark.skipif(
@@ -219,7 +219,7 @@ def test_ai2d_semantic_equivalence():
     ]
     
     for pred, gt in test_cases:
-        result = ai2d_open_answer_score(pred, gt)
+        result = ai2d_open_answer_score(pred, gt, question="What is the answer?")
         assert result==1
 
 # AI2D Test Cases with Variations
@@ -318,11 +318,12 @@ def test_ai2d_spring_tides():
     """Test spring tides question with correct and incorrect answers"""
     case = TEST_CASES[0]
     image_path = case["image_path"]
+    question = case["question"]
     
     # Test correct answer variations
     correct_results = []
     for variation in case["correct_variations"]:
-        result = ai2d_open_answer_score(variation, case["correct_answer"], image_path)
+        result = ai2d_open_answer_score(variation, case["correct_answer"], image_path, question)
         if result == 0:
             failed_cases.append(FailedCase(
                 "Spring Tides - Correct Variation",
@@ -340,7 +341,7 @@ def test_ai2d_spring_tides():
     # Test incorrect answers
     wrong_results = []
     for wrong_answer in case["wrong_answers"]:
-        result = ai2d_open_answer_score(wrong_answer, case["correct_answer"], image_path)
+        result = ai2d_open_answer_score(wrong_answer, case["correct_answer"], image_path, question)
         if result == 1:
             failed_cases.append(FailedCase(
                 "Spring Tides - Wrong Answer",
@@ -363,11 +364,12 @@ def test_ai2d_producers_ecosystem():
     """Test ecosystem question with correct and incorrect answers"""
     case = TEST_CASES[1]
     image_path = case["image_path"]
+    question = case["question"]
     
     # Test correct answer variations
     correct_results = []
     for variation in case["correct_variations"]:
-        result = ai2d_open_answer_score(variation, case["correct_answer"], image_path)
+        result = ai2d_open_answer_score(variation, case["correct_answer"], image_path, question)
         if result == 0:
             failed_cases.append(FailedCase(
                 "Producers Ecosystem - Correct Variation",
@@ -385,7 +387,7 @@ def test_ai2d_producers_ecosystem():
     # Test incorrect answers
     wrong_results = []
     for wrong_answer in case["wrong_answers"]:
-        result = ai2d_open_answer_score(wrong_answer, case["correct_answer"], image_path)
+        result = ai2d_open_answer_score(wrong_answer, case["correct_answer"], image_path, question)
         if result == 1:
             failed_cases.append(FailedCase(
                 "Producers Ecosystem - Wrong Answer",
@@ -408,11 +410,12 @@ def test_ai2d_vole_ecosystem():
     """Test vole ecosystem question with correct and incorrect answers"""
     case = TEST_CASES[2]
     image_path = case["image_path"]
+    question = case["question"]
     
     # Test correct answer variations
     correct_results = []
     for variation in case["correct_variations"]:
-        result = ai2d_open_answer_score(variation, case["correct_answer"], image_path)
+        result = ai2d_open_answer_score(variation, case["correct_answer"], image_path, question)
         if result == 0:
             failed_cases.append(FailedCase(
                 "Vole Ecosystem - Correct Variation",
@@ -430,7 +433,7 @@ def test_ai2d_vole_ecosystem():
     # Test incorrect answers
     wrong_results = []
     for wrong_answer in case["wrong_answers"]:
-        result = ai2d_open_answer_score(wrong_answer, case["correct_answer"], image_path)
+        result = ai2d_open_answer_score(wrong_answer, case["correct_answer"], image_path, question)
         if result == 1:
             failed_cases.append(FailedCase(
                 "Vole Ecosystem - Wrong Answer",
@@ -456,10 +459,11 @@ def test_ai2d_overall_pass_rates():
     
     for case in TEST_CASES:
         image_path = case["image_path"]
+        question = case["question"]
         
         # Test correct variations
         for variation in case["correct_variations"]:
-            result = ai2d_open_answer_score(variation, case["correct_answer"], image_path)
+            result = ai2d_open_answer_score(variation, case["correct_answer"], image_path, question)
             if result == 0:
                 failed_cases.append(FailedCase(
                     "Overall - Correct Variation",
@@ -472,7 +476,7 @@ def test_ai2d_overall_pass_rates():
         
         # Test wrong answers
         for wrong_answer in case["wrong_answers"]:
-            result = ai2d_open_answer_score(wrong_answer, case["correct_answer"], image_path)
+            result = ai2d_open_answer_score(wrong_answer, case["correct_answer"], image_path, question)
             if result == 1:
                 failed_cases.append(FailedCase(
                     "Overall - Wrong Answer",

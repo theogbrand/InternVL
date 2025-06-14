@@ -429,6 +429,10 @@ class AnswerAcceptability(BaseModel):
 
 def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=None):
     """Use Azure OpenAI GPT-4.1-mini to judge if the answer is acceptable"""
+    # Return 0 if either answer is empty
+    if not answer_pred.strip() or not answer_gt.strip():
+        return 0
+        
     client = AzureOpenAI(
         api_version="2025-01-01-preview",
         azure_endpoint="https://aisg-sj11.openai.azure.com/",
@@ -449,7 +453,7 @@ def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=Non
     messages = [
         {
             "role": "system",
-            "content": """You are an expert judge evaluating answers to questions about diagrams. Your task is to determine if the predicted answer is acceptable given the ground truth answer and the question asked. Consider three key aspects:
+            "content": """You are an expert judge evaluating answers to questions about scientific and mathematical diagrams. Your task is to determine if the predicted answer is acceptable given the ground truth answer and the question asked. Consider three key aspects:
 1. Does the predicted answer correctly address the specific question asked?
 2. Is the predicted answer semantically equivalent to the ground truth answer?
 3. Does the predicted answer match the meaning and intent of the ground truth answer?
