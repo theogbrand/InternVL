@@ -115,12 +115,12 @@ class AI2D_OPEN_ANSWER_Dataset(torch.utils.data.Dataset):
         answer = item['answer']
         uid = item['uid']
         
-        rollout_user_prompt = r"""You are an advanced AI system specialized in Visual Question Answering (VQA) for grade-school science diagrams. Your primary focus is on understanding relationships between diagram elements and reasoning about processes or changes, not just identifying objects.
+        rollout_user_prompt = r"""You are an advanced visual reasoning AI specialized in analyzing images for the Visual Question Answering (VQA) task. Your objective is to examine images containing various objects, scenes, geometric shapes, diagram elements, and potentially text or numbers, and reason about processes or changes, and answer questions about their attributes, relationships, and spatial arrangements.
 
-You will be provided with:
+I will provide you with:
 
-1. An image containing grade-school science diagrams
-2. A question about the contents of the image.
+1. An image containing science diagrams
+2. A question about the contents of the image
 
 Here is the question you need to answer:
 
@@ -130,28 +130,23 @@ Here is the question you need to answer:
 
 Please follow these steps to complete the task:
 
-1. Analyze the diagram:
-- Identify and number all visible elements (objects, labels, arrows, etc.)
-- Determine relationships between elements
-- Interpret any text or numbers present
-- Consider any temporal or causal relationships in the diagram
-- State any assumptions you're making about the diagram
+1. Carefully examine the image, paying attention to:
+   - Objects and scenes present
+   - Geometric shapes (if any)
+   - Attributes of each element (color, size, material, texture, etc.)
+   - Spatial relationships between elements
+   - Any text or numbers visible in the image (read and interpret these carefully)
 
-2. Reason about the question:
-- Identify the type of relationship or process the question is asking about
-- Apply the required reasoning to the diagram elements
-- Detail any comparisons or sequence of events you considered
-- Show your step-by-step reasoning to arrive at the answer
+2. Analyze the question to identify the type of reasoning required (e.g., counting, existence check, comparison, attribute query, or relationship assessment).
 
-3. Complete your response:
-Your response should include all three components:
-- Your visual element analysis in the [Visual Elements] section
-- Your reasoning process in the [Reasoning] section
-- Your final answer in the format below:
+3. Conduct a thorough visual analysis of the image in relation to the question, focusing on relevant elements and attributes.
 
-<correct_answer>
-$\boxed{Your answer here}$
-</correct_answer>
+4. Formulate your answer based on your analysis.
+
+5. Present your final answer as a single numeric string in a LaTeX-formatted box using this format: 
+   <correct_answer>
+   $\boxed{Your answer here}$
+   </correct_answer>
 
 Your task is to: 
 - Under the [Visual Elements] section, list out all relevant visual elements step-by-step that relate to answering the question. Be thorough but concise. Wrap each step in <step_1>, <step_2>, ... tags.
@@ -190,13 +185,8 @@ $\boxed{Your answer here}$
 </correct_answer>
 ```
 
-Important instructions:
-- Focus on understanding relationships and processes in the diagram, not just identifying objects
-- List all visual observations in the [Visual Elements] section using numbered <step_1>, <step_2>, ... tags
-- Explain your complete reasoning process in the [Reasoning] section using numbered <step_1>, <step_2>, ... tags
-- Your final answer should be concise and directly address the question
-- Place your answer within the LaTeX box format shown above
-- Do not include any explanation in the final answer section""".replace('{{QUESTION}}', question)
+Remember to:
+- Provide only a single string answer in the <correct_answer> section using the $\boxed{numeric_string}$ format, and no other text or commentary.""".replace('{{QUESTION}}', question)
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
