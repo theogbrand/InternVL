@@ -433,6 +433,10 @@ def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=Non
     if not answer_pred.strip() or not answer_gt.strip():
         return 0
         
+    # Early return if answers match exactly (case-insensitive)
+    if answer_pred.lower() == answer_gt.lower():
+        return 1
+        
     client = AzureOpenAI(
         api_version="2025-01-01-preview",
         azure_endpoint="https://aisg-sj11.openai.azure.com/",
