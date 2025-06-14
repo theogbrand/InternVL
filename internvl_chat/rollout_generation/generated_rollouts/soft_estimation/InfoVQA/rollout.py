@@ -553,8 +553,19 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
         except Exception as e:
             logger.error(f"✗ Failed to parse rollout {rollout_idx}: {e}")
             if rollout_idx < 5:  # Show first few parsing failures in detail
-                logger.error(f"Failed response text (first 500 chars):")
-                logger.error(response[:500] + "..." if len(response) > 500 else response)
+                try:
+                    logger.error("=" * 80)
+                    logger.error("Failed response text:")
+                    logger.error("-" * 40)
+                    if isinstance(response, str):
+                        logger.error(response)
+                    else:
+                        logger.error(f"Response is not a string: {type(response)}")
+                        logger.error(str(response))
+                    logger.error("-" * 40)
+                    logger.error("=" * 80)
+                except Exception as log_error:
+                    logger.error(f"Failed to log response text: {log_error}")
             # Create minimal tracking for failed rollout
             rollout_metadata[rollout_idx] = {
                 'input_data': input_data,
