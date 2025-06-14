@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbndl4ye-norwayeast.cognitiveservices.azure.com/"
-deployment = "gpt-4.1-13"
+endpoint = "https://aisg-sj10.openai.azure.com/"
+deployment = "gpt-4.1"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -742,7 +742,9 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
                 correctness = check_answer(
                     answer_pred=answer_pred,
                     answer_gt=str(rollout_meta['item']['answer']),
-                    mode=args.get('scoring_mode', '')
+                    mode=args.get('scoring_mode', ''),
+                    image_path=rollout_meta['item']['image_path'],
+                    question=rollout_meta['item']['question']
                 )
                 mc_details.append(f"MC{mc_idx}: {answer_pred} -> {correctness}")
             except Exception as e:
@@ -906,14 +908,14 @@ args = {
     'endpoint': endpoint,
     'deployment': deployment,
     'api_version': api_version,
-    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/AI2D/prepared_jsonl/AI2D_run1_open_answer.jsonl',
+    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/AI2D/prepared_jsonl/ai2d_run1_open_ans_12K_v1_subset.jsonl',
     'out_dir': 'ai2d_open_answer_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
-    'sample_start_idx': 4775,
-    'sample_end_idx': 5456,
+    'sample_start_idx': 1,
+    'sample_end_idx': 1000,
     'prompt_format_version': 'dvqa_v1_int_only',
-    'scoring_mode': 'dvqa_int_only_score',
+    'scoring_mode': 'ai2d_open_answer_score',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
@@ -976,7 +978,7 @@ def main():
     logger.info(f"Log file: {log_filepath}")
 
     # Load and process RAVEN dataset
-    dataset = CLEVR_V1_INT_ONLYDataset(
+    dataset = AI2D_OPEN_ANSWER_Dataset(
         data=args['prompt_path'],
         sample_start_idx=args['sample_start_idx'],
         sample_end_idx=args['sample_end_idx'],

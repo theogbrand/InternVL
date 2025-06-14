@@ -8,6 +8,11 @@ from sympy import latex
 from sympy.parsing.latex import parse_latex
 from tqdm import tqdm
 from pydantic import BaseModel, Field
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, wait_random
+from openai import RateLimitError
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class EvalAIAnswerProcessor:
@@ -427,6 +432,12 @@ class AnswerAcceptability(BaseModel):
         enum=["0", "1"]
     )
 
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=30) + wait_random(0, 10),
+    retry=retry_if_exception_type(RateLimitError),
+    before_sleep=lambda retry_state: logger.error(f"RateLimitError in ai2d_open_answer_score, attempt {retry_state.attempt_number}/5: {str(retry_state.outcome.exception())}") or retry_state.outcome.reraise()
+)
 def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=None):
     """Use Azure OpenAI GPT-4.1-mini to judge if the answer is acceptable"""
     # Return 0 if either answer is empty
@@ -635,7 +646,7 @@ def extract_dvqa_answer_int_from_xml(ans):
     return extract_answer_from_box(content)
 
 
-def check_answer(answer_pred, answer_gt, mode):
+def check_answer(answer_pred, answer_gt, mode, image_path=None, question=None):
     # seems to be a bug here, should return the cache value if a hit, otherwise accuracy var always gets overwritten.
     # if (answer_pred, answer_gt) in evaluator_cache:
     #     accuracy = evaluator_cache[(answer_pred, answer_gt)]
@@ -694,6 +705,9 @@ def check_answer(answer_pred, answer_gt, mode):
     
     if 'vqav2_num_str_only_score' in mode:
         accuracy = max(accuracy, vqav2_num_str_only_score(answer_pred, answer_gt))
+
+    if 'ai2d_open_answer_score' in mode:
+        accuracy = max(accuracy, ai2d_open_answer_score(answer_pred=answer_pred, answer_gt=answer_gt, image_path=image_path, question=question))
 
     accuracy = int(accuracy > 0.9)
     # evaluator_cache[(answer_pred, answer_gt)] = accuracy
