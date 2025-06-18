@@ -193,7 +193,7 @@ def test_ai2d_with_image(sample_image, tmp_path):
 def test_ai2d_invalid_image_path():
     """Test handling of invalid image path"""
     with pytest.raises(FileNotFoundError):
-        ai2d_open_answer_score("answer", "answer", "nonexistent.png", question="What is the answer?")
+        ai2d_open_answer_score("answer is this", "answer", "nonexistent.png", question="What is the answer?")
 
 @pytest.mark.skipif(
     not os.getenv("AZURE_CORRECTNESSJUDGE_API_KEY"),

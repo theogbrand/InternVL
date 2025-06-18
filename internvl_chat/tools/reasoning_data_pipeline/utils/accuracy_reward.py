@@ -450,7 +450,7 @@ def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=Non
         
     client = AzureOpenAI(
         api_version="2025-01-01-preview",
-        azure_endpoint="https://aisg-sj11.openai.azure.com/",
+        azure_endpoint="https://declaregpt4.openai.azure.com/",
         api_key=os.getenv("AZURE_CORRECTNESSJUDGE_API_KEY"),
         timeout=60.0
     )
@@ -499,7 +499,7 @@ SPELLING AND TYPOS: If the predicted answer has minor spelling mistakes or typos
     try:
         response = client.beta.chat.completions.parse(
             messages=messages,
-            model="gpt-4.1-mini",
+            model="gpt-4.1-nano",
             temperature=0.0,
             max_tokens=10,
             response_format=AnswerAcceptability
