@@ -38,8 +38,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbncunfi-australiaeast.cognitiveservices.azure.com/"
-deployment = "gpt-4.1-3"
+endpoint = "https://aisg-sj10.openai.azure.com/"
+deployment = "gpt-4.1"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -596,7 +596,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"  Estimated time: {math.ceil(total_mc_tasks/900)*60:.0f} seconds")
     
     # Step 2: Process MC tasks with time-based firing + streaming completion tracking
-    throughput_batch_size = 500  # adjust so each batch takes about 1 minute (which maximizes the 1M TPM)
+    throughput_batch_size = 1900  # adjust so each batch takes about 1 minute (which maximizes the 1M TPM)
     all_batches = [mc_task_queue[i:i+throughput_batch_size] for i in range(0, total_mc_tasks, throughput_batch_size)]
     
     # Output file for streaming saves
@@ -912,16 +912,16 @@ args = {
     'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/InfoVQA/prepared_jsonl/infovqa_run1_open_ans_9K_v1_subset.jsonl',
     'out_dir': 'infovqa_open_answer_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
-    'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
-    'sample_start_idx': 1001,
-    'sample_end_idx': 2000,
+    'num_return_sequences': 4,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
+    'sample_start_idx': 323,
+    'sample_end_idx': 644,
     'prompt_format_version': 'dvqa_v1_int_only', # reuse boxed answer format, and open ended scoring handled by ai2d 
     'scoring_mode': 'ai2d_open_answer_score', # reuse for open ans
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
     'early_stop': False, # when a step results in an incorrect answer we immediately stop rollouts from THAT step.
-    'max_new_tokens': 8192,
+    'max_new_tokens': 4096,
     'temperature': 1.0,
     'max_workers': (os.cpu_count() or 4) * 8,  # 8x CPU cores for I/O-bound API calls
     'debug_granular': True,  # Enable granular rollout-level debug logging

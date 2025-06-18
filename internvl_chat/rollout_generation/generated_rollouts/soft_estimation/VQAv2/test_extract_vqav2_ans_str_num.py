@@ -214,3 +214,39 @@ def test_latex_content_extraction_with_whitespace():
     for input_text, expected in newline_cases:
         extracted = extract_answer_from_box(input_text)
         assert extracted == expected, f"Failed for input with newlines: {input_text}\nExpected: {expected}\nGot: {extracted}"
+
+class TestBoxedNonIntegerAnswers:
+    """Test group for boxed answers containing non-integer content"""
+    
+    def test_boxed_text_answer(self):
+        """Test extraction of text answer from boxed expression"""
+        input_text = """<correct_answer>
+$\\boxed{carbon\\ emissions,\\ fresh\\ water,\\ farmland}$
+</correct_answer>"""
+        assert extract_dvqa_answer_int_from_xml(input_text) == "carbon\\ emissions,\\ fresh\\ water,\\ farmland"
+
+    def test_boxed_percentage_answer(self):
+        """Test extraction of percentage answer from boxed expression"""
+        input_text = """<correct_answer>
+$\\boxed{96\\%}$
+</correct_answer>"""
+        assert extract_dvqa_answer_int_from_xml(input_text) == "96\\%"
+
+    def test_boxed_percentage_with_newlines(self):
+        """Test extraction of percentage with explicit newlines in XML"""
+        input_text = "<correct_answer>\\n$\\boxed{75\\%}$\\n</correct_answer>"
+        assert extract_dvqa_answer_int_from_xml(input_text) == "75\\%"
+
+    def test_boxed_text_with_spaces(self):
+        """Test extraction of text answer with regular spaces"""
+        input_text = """<correct_answer>
+$\\boxed{carbon emissions, fresh water, farmland}$
+</correct_answer>"""
+        assert extract_dvqa_answer_int_from_xml(input_text) == "carbon emissions, fresh water, farmland"
+
+    def test_boxed_negative_percentage(self):
+        """Test extraction of negative percentage"""
+        input_text = """<correct_answer>
+$\\boxed{-25\\%}$
+</correct_answer>"""
+        assert extract_dvqa_answer_int_from_xml(input_text) == "-25\\%"

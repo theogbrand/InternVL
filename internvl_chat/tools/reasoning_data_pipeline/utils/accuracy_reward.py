@@ -435,8 +435,9 @@ class AnswerAcceptability(BaseModel):
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=2, max=30) + wait_random(0, 10),
-    retry=retry_if_exception_type(RateLimitError),
-    before_sleep=lambda retry_state: logger.error(f"RateLimitError in ai2d_open_answer_score, attempt {retry_state.attempt_number}/5: {str(retry_state.outcome.exception())}") or retry_state.outcome.reraise()
+    retry=retry_if_exception_type((RateLimitError, Exception)),
+    before_sleep=lambda retry_state: logger.warning(f"🔴 [CORRECTNESS_JUDGE_API] ai2d_answer_scoring retry {retry_state.attempt_number}/5 | {type(retry_state.outcome.exception()).__name__}: {str(retry_state.outcome.exception())[:200]} | retrying in {retry_state.next_action.sleep:.1f}s"),
+    reraise=True
 )
 def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=None):
     """Use Azure OpenAI GPT-4.1-mini to judge if the answer is acceptable"""
@@ -450,7 +451,7 @@ def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=Non
         
     client = AzureOpenAI(
         api_version="2025-01-01-preview",
-        azure_endpoint="https://declaregpt4.openai.azure.com/",
+        azure_endpoint="https://dalle-declare.openai.azure.com/",
         api_key=os.getenv("AZURE_CORRECTNESSJUDGE_API_KEY"),
         timeout=60.0
     )
@@ -508,8 +509,30 @@ SPELLING AND TYPOS: If the predicted answer has minor spelling mistakes or typos
         result = response.choices[0].message.parsed.is_acceptable
         return int(result) if result in ['0', '1'] else 0
         
+    except RateLimitError as e:
+        # Log rate limit details specifically for correctness judge
+        error_details = {
+            'function': 'ai2d_open_answer_score',
+            'endpoint': 'australiaeast.cognitiveservices.azure.com',
+            'model': 'gpt-4.1-nano',
+            'pred_answer': answer_pred[:100] if answer_pred else None,
+            'gt_answer': answer_gt[:100] if answer_gt else None,
+            'has_image': image_path is not None,
+            'question_preview': question[:100] if question else None
+        }
+        logger.error(f"🔴 [CORRECTNESS_JUDGE_API] RateLimitError in ai2d_open_answer_score: {str(e)} | Context: {error_details}")
+        raise RateLimitError(f"[CORRECTNESS_JUDGE_API] ai2d_answer_scoring rate limit: {str(e)}")
     except Exception as e:
-        raise Exception(f"Error in AI2D answer scoring: {str(e)}")
+        # Log non-rate-limit errors with context
+        error_details = {
+            'function': 'ai2d_open_answer_score',
+            'error_type': type(e).__name__,
+            'pred_answer': answer_pred[:100] if answer_pred else None,
+            'gt_answer': answer_gt[:100] if answer_gt else None,
+            'has_image': image_path is not None
+        }
+        logger.error(f"🔴 [CORRECTNESS_JUDGE_API] Non-rate-limit error in ai2d_open_answer_score: {type(e).__name__}: {str(e)} | Context: {error_details}")
+        raise Exception(f"[CORRECTNESS_JUDGE_API] Error in AI2D answer scoring: {str(e)}")
 
 def parse_answer(response, prompt_version):
     if prompt_version in ['zh', 'en']:
