@@ -26,6 +26,7 @@ from tenacity import (
 )
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import atexit
 
 # Initialize logger early to avoid NameError issues
 logger = logging.getLogger('infovqa_rollout')
@@ -38,8 +39,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://aisg-sj10.openai.azure.com/"
-deployment = "gpt-4.1"
+endpoint = "https://decla-mbncunfi-australiaeast.cognitiveservices.azure.com/"
+deployment = "gpt-4.1-3"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -54,7 +55,17 @@ shutdown_flag = threading.Event()
 
 def signal_handler(signum, frame):
     """Handle termination signals gracefully"""
-    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    try:
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        # Force immediate flush for critical shutdown message only
+        for handler in logger.handlers:
+            if hasattr(handler, 'flush'):
+                handler.flush()
+    except (NameError, AttributeError):
+        # Logger not configured yet, use print as fallback
+        print(f"Received signal {signum}, initiating graceful shutdown...")
+        sys.stdout.flush()
+    
     shutdown_flag.set()
     # Don't call sys.exit() from signal handler in threaded environment
 
@@ -272,10 +283,10 @@ def parse_response_to_perception_and_reasoning_steps_and_correct_answer(text, ma
     return result
 
 @retry(
-    stop=stop_after_attempt(15),  # More attempts for rate limits
+    stop=stop_after_attempt(3),  # More attempts for rate limits
     wait=wait_exponential(multiplier=2, min=4, max=300) + wait_random(0, 30),  # Longer backoff + jitter
     retry=retry_if_exception_type((Exception,)),
-    before_sleep=lambda retry_state: logger.warning(f"API retry {retry_state.attempt_number}/15: {type(retry_state.outcome.exception()).__name__}, retrying in {retry_state.next_action.sleep:.1f}s"),
+    before_sleep=lambda retry_state: logger.warning(f"API retry {retry_state.attempt_number}/3: {type(retry_state.outcome.exception()).__name__}, retrying in {retry_state.next_action.sleep:.1f}s"),
     reraise=True
 )
 def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000):
@@ -295,6 +306,13 @@ def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000)
         # Log detailed error information for monitoring
         error_type = type(e).__name__
         error_msg = str(e)
+        
+        # Check for content filter violation - DO NOT RETRY, return error message
+        if ('BadRequestError' in error_type and 
+            'Error code: 400' in error_msg and 
+            ('ResponsibleAIPolicyViolation' in error_msg or 'content_filter' in error_msg)):
+            logger.warning(f"Content filter violation detected, returning error response: {error_msg}")
+            return "Error code 400: content filter violation returned"
         
         # Extract rate limit details if available
         if hasattr(e, 'response') and hasattr(e.response, 'headers'):
@@ -356,10 +374,10 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
         return True
     
     @retry(
-        stop=stop_after_attempt(5),  # More task-level attempts
+        stop=stop_after_attempt(3),  # More task-level attempts
         wait=wait_exponential(multiplier=1, min=2, max=30) + wait_random(0, 10),
         retry=retry_if_exception(should_retry_task),
-        before_sleep=lambda retry_state: logger.warning(f"Input {retry_state.kwargs['args_tuple'][0]}, Seq {retry_state.kwargs['args_tuple'][1]}: Task attempt {retry_state.attempt_number}/5 failed, retrying in {retry_state.next_action.sleep:.1f}s - {type(retry_state.outcome.exception()).__name__}")
+        before_sleep=lambda retry_state: logger.warning(f"Input {retry_state.kwargs['args_tuple'][0]}, Seq {retry_state.kwargs['args_tuple'][1]}: Task attempt {retry_state.attempt_number}/3 failed, retrying in {retry_state.next_action.sleep:.1f}s - {type(retry_state.outcome.exception()).__name__}")
     )
     def process_single_request(args_tuple):
         input_idx, seq_idx, prompt, image, prefix, args_dict = args_tuple
@@ -913,8 +931,8 @@ args = {
     'out_dir': 'infovqa_open_answer_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 4,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
-    'sample_start_idx': 323,
-    'sample_end_idx': 644,
+    'sample_start_idx': 645,
+    'sample_end_idx': 966,
     'prompt_format_version': 'dvqa_v1_int_only', # reuse boxed answer format, and open ended scoring handled by ai2d 
     'scoring_mode': 'ai2d_open_answer_score', # reuse for open ans
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
@@ -957,7 +975,14 @@ def main():
     simple_formatter = logging.Formatter('%(message)s')
 
     # File handler - detailed logging (includes DEBUG)
-    file_handler = logging.FileHandler(log_filepath)
+    # Add basic log rotation to prevent disk issues
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        log_filepath,
+        maxBytes=100*1024*1024,  # 100MB per file
+        backupCount=2,  # Keep 2 backup files
+        encoding='utf-8'
+    )
     file_handler.setLevel(logging.DEBUG)  # Save all debug info to file
     file_handler.setFormatter(detailed_formatter)
 
@@ -968,15 +993,18 @@ def main():
     console_handler.setLevel(console_level)
     console_handler.setFormatter(simple_formatter)
 
-    # Add handlers to logger
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+    # Add handlers to logger (prevent duplicates)
+    if not logger.handlers:
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
 
     logger.info(f"Starting RAVEN rollout generation")
     logger.info(f"Configuration: {args}")
     logger.info(f"Using Azure OpenAI endpoint: {endpoint}")
     logger.info(f"Model deployment: {deployment}")
     logger.info(f"Log file: {log_filepath}")
+
+    atexit.register(lambda: logging.shutdown())
 
     # Load and process RAVEN dataset
     dataset = InfoVQA_Open_Ans_Dataset(

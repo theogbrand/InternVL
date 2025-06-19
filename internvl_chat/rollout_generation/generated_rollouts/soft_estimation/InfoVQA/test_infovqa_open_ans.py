@@ -1,6 +1,8 @@
 # $\boxed{carbon\ emissions,\ fresh\ water,\ farmland}$
 # <correct_answer>\n$\\boxed{96\\%}$\n</correct_answer>
-
+# <correct_answer>
+# $\boxed{900,\!000}$
+# </correct_answer>
 
 # import pytest
 # import sys
