@@ -456,15 +456,16 @@ def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=Non
         timeout=60.0
     )
     
-    image_content = None
-    if image_path is not None:
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Image path does not exist: {image_path}")
-        if not os.access(image_path, os.R_OK):
-            raise PermissionError(f"No read permission for image: {image_path}")
+    # exclude for now cos latency is too high
+    # image_content = None
+    # if image_path is not None:
+    #     if not os.path.exists(image_path):
+    #         raise FileNotFoundError(f"Image path does not exist: {image_path}")
+    #     if not os.access(image_path, os.R_OK):
+    #         raise PermissionError(f"No read permission for image: {image_path}")
             
-        with open(image_path, 'rb') as f:
-            image_content = base64.b64encode(f.read()).decode('utf-8')
+    #     with open(image_path, 'rb') as f:
+    #         image_content = base64.b64encode(f.read()).decode('utf-8')
     
     messages = [
         {
@@ -489,13 +490,14 @@ SPELLING AND TYPOS: If the predicted answer has minor spelling mistakes or typos
         }
     ]
     
-    if image_content:
-        messages[1]["content"].append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/png;base64,{image_content}"
-            }
-        })
+    # too slow
+    # if image_content:
+    #     messages[1]["content"].append({
+    #         "type": "image_url",
+    #         "image_url": {
+    #             "url": f"data:image/png;base64,{image_content}"
+    #         }
+    #     })
     
     try:
         response = client.beta.chat.completions.parse(
