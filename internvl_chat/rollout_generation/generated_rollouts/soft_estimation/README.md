@@ -36,13 +36,17 @@ Deployment   start_idx   end_idx   row_count
 
 AI2D is content filtered error.
 
+If content filter error thrown, API will return response "Content filter error", which results in a "fail to parse" error, and the prompt will be skipped, with error "fail to parse" in the log.
+
+Example: infovqa_run1_open_ans_9K_v1_subset_raven_rollouts_1289_1610_streaming has 8 "failed to parse" errors, which are all content filter errors, as can see in log, "failed to parse: 4/60 rollouts" twice. 
+
 InfoVQA, is numbered from 1-9K.
 
 Endpoint 1:  IDs 1-322 (322 samples)
 Endpoint 2:  IDs 323-644 (322 samples)
 Endpoint 3:  IDs 645-966 (322 samples)
-Endpoint 4:  IDs 967-1288 (322 samples)
-Endpoint 5:  IDs 1289-1610 (322 samples)
+Endpoint 4:  IDs 967-1288 (322 samples) done
+Endpoint 5:  IDs 1289-1610 (322 samples) done
 Endpoint 6:  IDs 1611-1932 (322 samples)
 Endpoint 7:  IDs 1933-2254 (322 samples)
 Endpoint 8:  IDs 2255-2576 (322 samples)
