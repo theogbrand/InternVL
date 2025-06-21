@@ -26,6 +26,7 @@ from tenacity import (
 )
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import atexit
 
 # Initialize logger early to avoid NameError issues
 logger = logging.getLogger('ai2d_rollout')
@@ -38,8 +39,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://aisg-sj10.openai.azure.com/"
-deployment = "gpt-4.1"
+endpoint = "https://decla-mbndd7fk-uksouth.cognitiveservices.azure.com/"
+deployment = "gpt-4.1-11"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -54,7 +55,17 @@ shutdown_flag = threading.Event()
 
 def signal_handler(signum, frame):
     """Handle termination signals gracefully"""
-    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    try:
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        # Force immediate flush for critical shutdown message only
+        for handler in logger.handlers:
+            if hasattr(handler, 'flush'):
+                handler.flush()
+    except (NameError, AttributeError):
+        # Logger not configured yet, use print as fallback
+        print(f"Received signal {signum}, initiating graceful shutdown...")
+        sys.stdout.flush()
+    
     shutdown_flag.set()
     # Don't call sys.exit() from signal handler in threaded environment
 
@@ -143,7 +154,7 @@ Please follow these steps to complete the task:
 
 4. Formulate your answer based on your analysis.
 
-5. Present your final answer as a single numeric string in a LaTeX-formatted box using this format: 
+5. Present your final answer as a single string in a LaTeX-formatted box using this format: 
    <correct_answer>
    $\boxed{Your answer here}$
    </correct_answer>
@@ -186,7 +197,7 @@ $\boxed{Your answer here}$
 ```
 
 Remember to:
-- Provide only a single string answer in the <correct_answer> section using the $\boxed{numeric_string}$ format, and no other text or commentary.""".replace('{{QUESTION}}', question)
+- Provide only a single string answer in the <correct_answer> section using the $\boxed{string_answer}$ format, and no other text or commentary.""".replace('{{QUESTION}}', question)
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
@@ -272,10 +283,10 @@ def parse_response_to_perception_and_reasoning_steps_and_correct_answer(text, ma
     return result
 
 @retry(
-    stop=stop_after_attempt(15),  # More attempts for rate limits
+    stop=stop_after_attempt(3),  # More attempts for rate limits
     wait=wait_exponential(multiplier=2, min=4, max=300) + wait_random(0, 30),  # Longer backoff + jitter
     retry=retry_if_exception_type((Exception,)),
-    before_sleep=lambda retry_state: logger.warning(f"API retry {retry_state.attempt_number}/15: {type(retry_state.outcome.exception()).__name__}, retrying in {retry_state.next_action.sleep:.1f}s"),
+    before_sleep=lambda retry_state: logger.warning(f"API retry {retry_state.attempt_number}/3: {type(retry_state.outcome.exception()).__name__}, retrying in {retry_state.next_action.sleep:.1f}s"),
     reraise=True
 )
 def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000):
@@ -295,6 +306,13 @@ def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000)
         # Log detailed error information for monitoring
         error_type = type(e).__name__
         error_msg = str(e)
+        
+        # Check for content filter violation - DO NOT RETRY, return error message
+        if ('BadRequestError' in error_type and 
+            'Error code: 400' in error_msg and 
+            ('ResponsibleAIPolicyViolation' in error_msg or 'content_filter' in error_msg)):
+            logger.warning(f"Content filter violation detected, returning error response: {error_msg}")
+            return "Error code 400: content filter violation returned"
         
         # Extract rate limit details if available
         if hasattr(e, 'response') and hasattr(e.response, 'headers'):
@@ -356,10 +374,10 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
         return True
     
     @retry(
-        stop=stop_after_attempt(5),  # More task-level attempts
+        stop=stop_after_attempt(3),  # More task-level attempts
         wait=wait_exponential(multiplier=1, min=2, max=30) + wait_random(0, 10),
         retry=retry_if_exception(should_retry_task),
-        before_sleep=lambda retry_state: logger.warning(f"Input {retry_state.kwargs['args_tuple'][0]}, Seq {retry_state.kwargs['args_tuple'][1]}: Task attempt {retry_state.attempt_number}/5 failed, retrying in {retry_state.next_action.sleep:.1f}s - {type(retry_state.outcome.exception()).__name__}")
+        before_sleep=lambda retry_state: logger.warning(f"Input {retry_state.kwargs['args_tuple'][0]}, Seq {retry_state.kwargs['args_tuple'][1]}: Task attempt {retry_state.attempt_number}/3 failed, retrying in {retry_state.next_action.sleep:.1f}s - {type(retry_state.outcome.exception()).__name__}")
     )
     def process_single_request(args_tuple):
         input_idx, seq_idx, prompt, image, prefix, args_dict = args_tuple
@@ -553,8 +571,19 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
         except Exception as e:
             logger.error(f"✗ Failed to parse rollout {rollout_idx}: {e}")
             if rollout_idx < 5:  # Show first few parsing failures in detail
-                logger.error(f"Failed response text (first 500 chars):")
-                logger.error(response[:500] + "..." if len(response) > 500 else response)
+                try:
+                    logger.error("=" * 80)
+                    logger.error("Failed response text:")
+                    logger.error("-" * 40)
+                    if isinstance(response, str):
+                        logger.error(response)
+                    else:
+                        logger.error(f"Response is not a string: {type(response)}")
+                        logger.error(str(response))
+                    logger.error("-" * 40)
+                    logger.error("=" * 80)
+                except Exception as log_error:
+                    logger.error(f"Failed to log response text: {log_error}")
             # Create minimal tracking for failed rollout
             rollout_metadata[rollout_idx] = {
                 'input_data': input_data,
@@ -585,7 +614,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"  Estimated time: {math.ceil(total_mc_tasks/900)*60:.0f} seconds")
     
     # Step 2: Process MC tasks with time-based firing + streaming completion tracking
-    throughput_batch_size = 500  # adjust so each batch takes about 1 minute (which maximizes the 1M TPM)
+    throughput_batch_size = 1750  # either 5M or 4M TPM # adjust so each batch takes about 1 minute (which maximizes the 1M TPM)
     all_batches = [mc_task_queue[i:i+throughput_batch_size] for i in range(0, total_mc_tasks, throughput_batch_size)]
     
     # Output file for streaming saves
@@ -901,16 +930,16 @@ args = {
     'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/AI2D/prepared_jsonl/ai2d_run1_open_ans_12K_v1_subset.jsonl',
     'out_dir': 'ai2d_open_answer_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
-    'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
+    'num_return_sequences': 4,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
     'sample_start_idx': 1,
-    'sample_end_idx': 1000,
+    'sample_end_idx': 322,
     'prompt_format_version': 'dvqa_v1_int_only',
     'scoring_mode': 'ai2d_open_answer_score',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
     'early_stop': False, # when a step results in an incorrect answer we immediately stop rollouts from THAT step.
-    'max_new_tokens': 8192,
+    'max_new_tokens': 4096,
     'temperature': 1.0,
     'max_workers': (os.cpu_count() or 4) * 8,  # 8x CPU cores for I/O-bound API calls
     'debug_granular': True,  # Enable granular rollout-level debug logging
@@ -946,7 +975,14 @@ def main():
     simple_formatter = logging.Formatter('%(message)s')
 
     # File handler - detailed logging (includes DEBUG)
-    file_handler = logging.FileHandler(log_filepath)
+    # Add basic log rotation to prevent disk issues
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        log_filepath,
+        maxBytes=100*1024*1024,  # 100MB per file
+        backupCount=2,  # Keep 2 backup files
+        encoding='utf-8'
+    )
     file_handler.setLevel(logging.DEBUG)  # Save all debug info to file
     file_handler.setFormatter(detailed_formatter)
 
@@ -957,15 +993,18 @@ def main():
     console_handler.setLevel(console_level)
     console_handler.setFormatter(simple_formatter)
 
-    # Add handlers to logger
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+    # Add handlers to logger (prevent duplicates)
+    if not logger.handlers:
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
 
     logger.info(f"Starting RAVEN rollout generation")
     logger.info(f"Configuration: {args}")
     logger.info(f"Using Azure OpenAI endpoint: {endpoint}")
     logger.info(f"Model deployment: {deployment}")
     logger.info(f"Log file: {log_filepath}")
+
+    atexit.register(lambda: logging.shutdown())
 
     # Load and process RAVEN dataset
     dataset = AI2D_OPEN_ANSWER_Dataset(
