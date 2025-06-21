@@ -39,8 +39,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbndd7fk-uksouth.cognitiveservices.azure.com/"
-deployment = "gpt-4.1-11"
+endpoint = "https://decla-mbnd9fjk-switzerlandnorth.cognitiveservices.azure.com/"
+deployment = "gpt-4.1"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -614,7 +614,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"  Estimated time: {math.ceil(total_mc_tasks/900)*60:.0f} seconds")
     
     # Step 2: Process MC tasks with time-based firing + streaming completion tracking
-    throughput_batch_size = 1750  # adjust so each batch takes about 1 minute (which maximizes the 1M TPM)
+    throughput_batch_size = 1750  # either 5M or 4M TPM # adjust so each batch takes about 1 minute (which maximizes the 1M TPM)
     all_batches = [mc_task_queue[i:i+throughput_batch_size] for i in range(0, total_mc_tasks, throughput_batch_size)]
     
     # Output file for streaming saves
@@ -931,8 +931,8 @@ args = {
     'out_dir': 'infovqa_open_answer_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 4,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
-    'sample_start_idx': 1289,
-    'sample_end_idx': 1610,
+    'sample_start_idx': 645,
+    'sample_end_idx': 966,
     'prompt_format_version': 'dvqa_v1_int_only', # reuse boxed answer format, and open ended scoring handled by ai2d 
     'scoring_mode': 'ai2d_open_answer_score', # reuse for open ans
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
