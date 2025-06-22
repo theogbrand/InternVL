@@ -1,3 +1,5 @@
+# Rolling Out
+
 1. Transfer all images and their absolute paths to preprocessing_scripts/{dataset_name}
 2. Specify the endpoints, deployment and config in rollout.py THEN ./run_rollout.sh to generate rollouts
     - edit check_answer function in rollout.py to match the answer format of the dataset (for RAVEN, option 1-8 ONLY, integer only matching for MMPR correctness prompts, GPT answer checking for open text)
@@ -70,3 +72,9 @@ Endpoint 25: IDs 7717-8037 (321 samples)
 Endpoint 26: IDs 8038-8358 (321 samples)
 Endpoint 27: IDs 8359-8679 (321 samples)
 Endpoint 28: IDs 8680-9000 (321 samples)
+
+# Verification
+1. merge_and_map_batch.py to merge the rollouts into a single jsonl file
+2. ./run_batch_processor.sh to verify the rollouts, checking for parameters in batch_processor.py
+
+Checks every minute if batch is done, if done, kick off next batch for verification.
