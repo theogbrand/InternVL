@@ -451,7 +451,7 @@ def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=Non
         
     client = AzureOpenAI(
         api_version="2025-01-01-preview",
-        azure_endpoint="https://decla-mbnfhzpq-uaenorth.cognitiveservices.azure.com/",
+        azure_endpoint="https://decla-mc41ivb1-southeastasia.cognitiveservices.azure.com/",
         api_key=os.getenv("AZURE_CORRECTNESSJUDGE_API_KEY"),
         timeout=60.0
     )
