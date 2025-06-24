@@ -384,13 +384,24 @@ def multi_choice_score(answer_pred, answer_gt):
     return answer_pred.lower() == answer_gt.lower()
 
 
-def raven_score(answer_pred, answer_gt):
+def raven_score_integer_only(answer_pred, answer_gt):
     """Exact string match for RAVEN dataset (integers 1-8)"""
     answer_pred = answer_pred.strip()
     answer_gt = answer_gt.strip()
     
     # Exact string match for integers 1-8
     if answer_pred == answer_gt and answer_pred in ['1', '2', '3', '4', '5', '6', '7', '8']:
+        return 1
+    
+    return 0
+
+def raven_score_alphabet_only(answer_pred, answer_gt):
+    """Exact string match for RAVEN dataset (alphabets A-H)"""
+    answer_pred = answer_pred.strip()
+    answer_gt = answer_gt.strip()
+    
+    # Exact string match for alphabets A-H
+    if answer_pred == answer_gt and answer_pred in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']:
         return 1
     
     return 0
@@ -543,6 +554,8 @@ def parse_answer(response, prompt_version):
         return None, extract_answer_from_box(response)
     if prompt_version == 'raven_v1':
         return None, extract_raven_choices_answer_from_xml(response)
+    if prompt_version == 'raven_v2':
+        return None, extract_raven_choices_answer_from_xml_v2(response)
     if prompt_version == 'dvqa_v1_int_only':
         return None, extract_dvqa_answer_int_from_xml(response)
     raise NotImplementedError(f'Unsupported prompt_version: {prompt_version}')
@@ -644,6 +657,51 @@ def extract_raven_choices_answer_from_xml(ans):
     # If no pattern found, return original content
     return content
 
+def extract_raven_choices_answer_from_xml_v2(ans):
+    start_tag = '<correct_answer>'
+    end_tag = '</correct_answer>'
+    
+    start_idx = ans.rfind(start_tag)
+    if start_idx == -1:
+        return ans
+    
+    start_idx += len(start_tag)
+    end_idx = ans.find(end_tag, start_idx)
+    
+    if end_idx == -1:
+        # Unmatched opening tag
+        return ans
+    
+    content = ans[start_idx:end_idx].strip()
+    
+    # Assertions for correctness
+    assert len(content) > 0, f'Empty answer content between XML tags: {ans}'
+    assert start_tag in ans, f'Missing opening tag {start_tag}: {ans}'
+    assert end_tag in ans, f'Missing closing tag {end_tag}: {ans}'
+    assert ans.count(start_tag) == ans.count(end_tag), f'Mismatched XML tags: {ans.count(start_tag)} opening vs {ans.count(end_tag)} closing'
+    
+    boxed_content = extract_answer_from_box(content)
+   
+    # For RAVEN: extract alphabetic answer from potentially verbose content
+    
+    # Try to find standalone letter (A-H for RAVEN)
+    letter_match = re.search(r'\b([A-H])\b', boxed_content, re.IGNORECASE)
+    if letter_match:
+        return letter_match.group(1).upper()
+    
+    # Try to find letter in parentheses like "(A)"
+    paren_match = re.search(r'\(([A-H])\)', boxed_content, re.IGNORECASE)
+    if paren_match:
+        return paren_match.group(1).upper()
+    
+    # Try to find letter followed by period like "A."
+    period_match = re.search(r'\b([A-H])\.\s', boxed_content, re.IGNORECASE)
+    if period_match:
+        return period_match.group(1).upper()
+    
+    # If no pattern found, return original content
+    return boxed_content
+
 
 def extract_dvqa_answer_int_from_xml(ans):
     start_tag = '<correct_answer>'
@@ -722,8 +780,11 @@ def check_answer(answer_pred, answer_gt, mode, image_path=None, question=None):
     if 'latex_score' in mode and (use_latex_score(answer_pred) or use_latex_score(answer_gt)):
         accuracy = max(accuracy, latex_score(answer_pred, answer_gt))
 
-    if 'raven_score' in mode:
-        accuracy = max(accuracy, raven_score(answer_pred, answer_gt))
+    if 'raven_score_integer_only' in mode:
+        accuracy = max(accuracy, raven_score_integer_only(answer_pred, answer_gt))
+    
+    if 'raven_score_alphabet_only' in mode:
+        accuracy = max(accuracy, raven_score_alphabet_only(answer_pred, answer_gt))
 
     if 'dvqa_int_only_score' in mode:
         accuracy = max(accuracy, dvqa_int_only_score(answer_pred, answer_gt))
