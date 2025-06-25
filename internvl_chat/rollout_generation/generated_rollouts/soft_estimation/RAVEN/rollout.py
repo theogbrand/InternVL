@@ -26,6 +26,7 @@ from tenacity import (
 )
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import atexit
 
 # Initialize logger early to avoid NameError issues
 logger = logging.getLogger('raven_rollout')
@@ -38,8 +39,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://dalle-declare.openai.azure.com/"
-deployment = "gpt-4.1"
+endpoint = "https://decla-mbnf99mc-koreacentral.cognitiveservices.azure.com/"
+deployment = "gpt-4.1-21"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -49,16 +50,22 @@ client = AzureOpenAI(
     timeout=60.0,  # 60 second timeout
 )
 
-# Simple rate limiting - no complex tracking needed since we use time-based batch firing
-
 # Global shutdown flag for graceful termination
 shutdown_flag = threading.Event()
 
-
-
 def signal_handler(signum, frame):
     """Handle termination signals gracefully"""
-    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    try:
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        # Force immediate flush for critical shutdown message only
+        for handler in logger.handlers:
+            if hasattr(handler, 'flush'):
+                handler.flush()
+    except (NameError, AttributeError):
+        # Logger not configured yet, use print as fallback
+        print(f"Received signal {signum}, initiating graceful shutdown...")
+        sys.stdout.flush()
+    
     shutdown_flag.set()
     # Don't call sys.exit() from signal handler in threaded environment
 
@@ -88,43 +95,24 @@ class RAVENDataset(torch.utils.data.Dataset):
         sample_end_idx=None,
     ):
         self.data = []
-        total_lines = 0
+        total_lines = 0 # it is 1-indexed for this dataset since we are using line numbers
         
         with open(data, 'r', encoding='utf-8') as file:
             for line in file:
                 total_lines += 1
                 try:
                     item = json.loads(line)
-                    item_id = item.get('id', -1)
-                    
-                    # Include if no filtering or ID is in range
-                    if sample_end_idx is None or (sample_start_idx <= item_id <= sample_end_idx):
+                    # Include if no filtering or within range
+                    if sample_end_idx is None or (sample_start_idx <= total_lines <= sample_end_idx):
                         self.data.append(line)
                         
                 except json.JSONDecodeError:
                     continue
 
         if sample_end_idx is not None:
-            print(f'Filtered {total_lines} lines to {len(self.data)} samples in ID range [{sample_start_idx}, {sample_end_idx}]')
+            print(f'Filtered {total_lines} lines to {len(self.data)} samples in range [{sample_start_idx}, {sample_end_idx}]')
         else:
-            print(f'Loaded {len(self.data)} samples (no ID filtering)')
-
-    def apply_step_sampling(self, sample_max_num, sample_start_idx=0):
-        """
-        Apply step-wise sampling (old sample_max_num functionality).
-        
-        Args:
-            sample_max_num: Maximum number of samples to keep
-            sample_start_idx: Starting line position for sampling
-            
-        Returns:
-            None (modifies self.data in place)
-        """
-        if sample_max_num is not None and len(self.data) > sample_max_num:
-            print(f'Applying step sampling: {len(self.data)} => {sample_max_num}')
-            step = max(len(self.data) // sample_max_num, 1)
-            self.data = self.data[sample_start_idx::step][:sample_max_num]
-            print(f'Number of data lines after step sampling: {len(self.data)}')
+            print(f'Loaded {len(self.data)} samples (no filtering)')
 
     def __len__(self):
         return len(self.data)
@@ -175,10 +163,12 @@ It is crucial that your solution contains these sections in the exact format des
 </step_m>
 
 <correct_answer>
-...(Clearly state which of the 8 candidate images is the best candidate image as the missing tile to complete the matrix. If the candidates are numbered, lettered, or can be uniquely described, use that identifier.)...
+$\boxed{Your answer here}$
 </correct_answer>
 ```
-"""
+
+Remember to:
+- Provide only a single string answer in the <correct_answer> section using the $\boxed{string_answer}$ format, and no other text or commentary."""
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
@@ -264,10 +254,10 @@ def parse_response_to_perception_and_reasoning_steps_and_correct_answer(text, ma
     return result
 
 @retry(
-    stop=stop_after_attempt(15),  # More attempts for rate limits
+    stop=stop_after_attempt(3),  # More attempts for rate limits
     wait=wait_exponential(multiplier=2, min=4, max=300) + wait_random(0, 30),  # Longer backoff + jitter
     retry=retry_if_exception_type((Exception,)),
-    before_sleep=lambda retry_state: logger.warning(f"API retry {retry_state.attempt_number}/15: {type(retry_state.outcome.exception()).__name__}, retrying in {retry_state.next_action.sleep:.1f}s"),
+    before_sleep=lambda retry_state: logger.warning(f"API retry {retry_state.attempt_number}/3: {type(retry_state.outcome.exception()).__name__}, retrying in {retry_state.next_action.sleep:.1f}s"),
     reraise=True
 )
 def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000):
@@ -287,6 +277,13 @@ def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000)
         # Log detailed error information for monitoring
         error_type = type(e).__name__
         error_msg = str(e)
+        
+        # Check for content filter violation - DO NOT RETRY, return error message
+        if ('BadRequestError' in error_type and 
+            'Error code: 400' in error_msg and 
+            ('ResponsibleAIPolicyViolation' in error_msg or 'content_filter' in error_msg)):
+            logger.warning(f"Content filter violation detected, returning error response: {error_msg}")
+            return "Error code 400: content filter violation returned"
         
         # Extract rate limit details if available
         if hasattr(e, 'response') and hasattr(e.response, 'headers'):
@@ -348,10 +345,10 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
         return True
     
     @retry(
-        stop=stop_after_attempt(5),  # More task-level attempts
+        stop=stop_after_attempt(3),  # More task-level attempts
         wait=wait_exponential(multiplier=1, min=2, max=30) + wait_random(0, 10),
         retry=retry_if_exception(should_retry_task),
-        before_sleep=lambda retry_state: logger.warning(f"Input {retry_state.kwargs['args_tuple'][0]}, Seq {retry_state.kwargs['args_tuple'][1]}: Task attempt {retry_state.attempt_number}/5 failed, retrying in {retry_state.next_action.sleep:.1f}s - {type(retry_state.outcome.exception()).__name__}")
+        before_sleep=lambda retry_state: logger.warning(f"Input {retry_state.kwargs['args_tuple'][0]}, Seq {retry_state.kwargs['args_tuple'][1]}: Task attempt {retry_state.attempt_number}/3 failed, retrying in {retry_state.next_action.sleep:.1f}s - {type(retry_state.outcome.exception()).__name__}")
     )
     def process_single_request(args_tuple):
         input_idx, seq_idx, prompt, image, prefix, args_dict = args_tuple
@@ -375,7 +372,6 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
             ]
             
             messages = [
-                {"role": "system", "content": "You are a helpful assistant that excels at visual reasoning and pattern recognition."},
                 {"role": "user", "content": content}
             ]
             
@@ -546,8 +542,19 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
         except Exception as e:
             logger.error(f"✗ Failed to parse rollout {rollout_idx}: {e}")
             if rollout_idx < 5:  # Show first few parsing failures in detail
-                logger.error(f"Failed response text (first 500 chars):")
-                logger.error(response[:500] + "..." if len(response) > 500 else response)
+                try:
+                    logger.error("=" * 80)
+                    logger.error("Failed response text:")
+                    logger.error("-" * 40)
+                    if isinstance(response, str):
+                        logger.error(response)
+                    else:
+                        logger.error(f"Response is not a string: {type(response)}")
+                        logger.error(str(response))
+                    logger.error("-" * 40)
+                    logger.error("=" * 80)
+                except Exception as log_error:
+                    logger.error(f"Failed to log response text: {log_error}")
             # Create minimal tracking for failed rollout
             rollout_metadata[rollout_idx] = {
                 'input_data': input_data,
@@ -578,14 +585,14 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"  Estimated time: {math.ceil(total_mc_tasks/900)*60:.0f} seconds")
     
     # Step 2: Process MC tasks with time-based firing + streaming completion tracking
-    batch_size = 500  # Reduced to 500 RPM for less aggressive rate limiting
-    all_batches = [mc_task_queue[i:i+batch_size] for i in range(0, total_mc_tasks, batch_size)]
+    throughput_batch_size = 1750  # either 5M or 4M TPM # adjust so each batch takes about 1 minute (which maximizes the 1M TPM)
+    all_batches = [mc_task_queue[i:i+throughput_batch_size] for i in range(0, total_mc_tasks, throughput_batch_size)]
     
     # Output file for streaming saves
     output_file = os.path.join(args['out_dir'], f'{args["dataset_name"]}_raven_rollouts_{args["sample_start_idx"]}_{args["sample_end_idx"]}_streaming.jsonl')
     completed_rollouts = 0
     
-    logger.info(f"Starting time-based MC processing with streaming saves (500 RPM rate limit)")
+    logger.info(f"Starting time-based MC processing with streaming saves ({throughput_batch_size} RPM rate limit)")
     start_time = time.time()
     
     # Open output file immediately for true streaming (append mode to preserve existing rollouts)
@@ -593,7 +600,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = []
             
-            # Fire batches every 60 seconds to maintain 500 RPM throughput
+            # Fire batches every 60 seconds to maintain throughput_batch_size RPM throughput
             for batch_idx, batch_tasks in enumerate(all_batches):
                 fire_time = start_time + batch_idx * 60.0
                 current_time = time.time()
@@ -694,7 +701,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"STREAMING MC Pipeline Completed:")
     logger.info(f"  Total MC tasks: {total_mc_tasks}")
     logger.info(f"  Completed rollouts: {completed_rollouts}/{total_rollouts}")
-    logger.info(f"  Duration: {total_duration:.0f}s ({actual_rate:.0f} tasks/min, target: 500 RPM)")
+    logger.info(f"  Duration: {total_duration:.0f}s ({actual_rate:.0f} tasks/min, target: {throughput_batch_size} RPM)")
     logger.info(f"  Saved to: {output_file}")
     
     # Return empty list since we saved incrementally
@@ -709,7 +716,7 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
     if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5):
         logger.debug(f"BUILDING OUTPUT FOR ROLLOUT {rollout_idx}:")
         logger.debug(f"  Total steps: {len(rollout_meta['steps'])}")
-        logger.debug(f"  GT Answer: {rollout_meta['item']['correct_answer']}")
+        logger.debug(f"  GT Answer: {rollout_meta['item']['answer']}")
     
     for step_idx in range(len(rollout_meta['steps'])):
         # Collect MC results for this step
@@ -720,12 +727,12 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
             mc_response = rollout_meta['mc_results'].get((step_idx, mc_idx), "")
             
             try:
-                parsed_answer = parse_answer(mc_response, prompt_version=args.get('prompt_version', 'raven_v1'))
+                parsed_answer = parse_answer(mc_response, prompt_version=args.get('prompt_format_version', ''))
                 answer_pred = parsed_answer[-1]
                 correctness = check_answer(
                     answer_pred=answer_pred,
                     answer_gt=str(rollout_meta['item']['correct_answer']),
-                    mode='raven_score'
+                    mode=args.get('scoring_mode', ''),
                 )
                 mc_details.append(f"MC{mc_idx}: {answer_pred} -> {correctness}")
             except Exception as e:
@@ -889,13 +896,14 @@ args = {
     'endpoint': endpoint,
     'deployment': deployment,
     'api_version': api_version,
-    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/distribute_nine_train.jsonl',
+    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/last_four_jsonl/in_center_single_out_center_single_test.jsonl', # 4 separate files
     'out_dir': 'raven_rollouts_output',
-    'batch_size': 20,  # 125 samples per batch
-    'num_return_sequences': 4,  # 20×4 = 80 requests per batch (conservative RPM utilization)
-    'sample_start_idx': 8000,
-    'sample_end_idx': 9999,
-    'prompt_version': 'raven_v1',
+    'batch_size': 10,  # ~20 samples per batch
+    'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
+    'sample_start_idx': 1,
+    'sample_end_idx': 1143,
+    'prompt_format_version': 'raven_v2',
+    'scoring_mode': 'raven_score_alphabet_only',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
@@ -918,8 +926,12 @@ def main():
 
     # Setup logging
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_filename = f"raven_rollout_{timestamp}_samples_{args['sample_start_idx']}_{args['sample_end_idx']}.log"
-    log_filepath = os.path.join(args['out_dir'], log_filename)
+    
+    logs_dir = os.path.join(args['out_dir'], f"{args['dataset_name']}_rollout_logs")
+    os.makedirs(logs_dir, exist_ok=True)
+
+    log_filename = f"{args['dataset_name']}_rollout_{timestamp}_samples_{args['sample_start_idx']}_{args['sample_end_idx']}.txt"
+    log_filepath = os.path.join(logs_dir, log_filename)
 
     # Configure the logger (already created at top of file)
     logger.setLevel(logging.DEBUG)  # Allow all levels to reach handlers
@@ -932,7 +944,14 @@ def main():
     simple_formatter = logging.Formatter('%(message)s')
 
     # File handler - detailed logging (includes DEBUG)
-    file_handler = logging.FileHandler(log_filepath)
+    # Add basic log rotation to prevent disk issues
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        log_filepath,
+        maxBytes=100*1024*1024,  # 100MB per file
+        backupCount=2,  # Keep 2 backup files
+        encoding='utf-8'
+    )
     file_handler.setLevel(logging.DEBUG)  # Save all debug info to file
     file_handler.setFormatter(detailed_formatter)
 
@@ -943,15 +962,18 @@ def main():
     console_handler.setLevel(console_level)
     console_handler.setFormatter(simple_formatter)
 
-    # Add handlers to logger
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+    # Add handlers to logger (prevent duplicates)
+    if not logger.handlers:
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
 
     logger.info(f"Starting RAVEN rollout generation")
     logger.info(f"Configuration: {args}")
     logger.info(f"Using Azure OpenAI endpoint: {endpoint}")
     logger.info(f"Model deployment: {deployment}")
     logger.info(f"Log file: {log_filepath}")
+
+    atexit.register(lambda: logging.shutdown())
 
     # Load and process RAVEN dataset
     dataset = RAVENDataset(
@@ -980,12 +1002,12 @@ def main():
     if is_terminal:
         progress_bar = tqdm(
             range(len(dataset)), 
-            desc=f"Processing RAVEN samples (ID range {args['sample_start_idx']} to {args['sample_end_idx']})",
+            desc=f"Processing {args['dataset_name']} samples (ID range {args['sample_start_idx']} to {args['sample_end_idx']})",
             unit="sample"
         )
     else:
         progress_bar = None
-        logger.info(f"Processing {len(dataset)} RAVEN samples (ID range {args['sample_start_idx']} to {args['sample_end_idx']})")
+        logger.info(f"Processing {len(dataset)} {args['dataset_name']} samples (ID range {args['sample_start_idx']} to {args['sample_end_idx']})")
 
     current_sample = 0
 
@@ -1064,7 +1086,7 @@ def main():
             if sample_idx == 0:
                 logger.info(f"\n[{localtime()}] First sample processing details:")
                 logger.info(f"Image path: {sample['image_path']}")
-                logger.info(f"Correct answer: {sample['item']['correct_answer']}")
+                logger.info(f"Correct answer: {sample['item']['answer']}")
                 logger.info(f"Batch processing time: {batch_duration:.2f} seconds")
                 logger.info(f"Average sample time: {avg_sample_time:.2f} seconds")
                 logger.info(f"Outputs saved incrementally via streaming pipeline")
