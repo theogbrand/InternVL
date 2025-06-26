@@ -1,3 +1,5 @@
+internvl_chat/rollout_generation/generated_rollouts/soft_estimation/CLEVR-Math/final_rollout_output
+internvl_chat/rollout_generation/generated_rollouts/soft_estimation/CLEVR-Math/verification/verification_pipeline_outputs
 internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/raven_rollouts_output/*
 internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs/verification_batches/*
 internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/final_output/*
