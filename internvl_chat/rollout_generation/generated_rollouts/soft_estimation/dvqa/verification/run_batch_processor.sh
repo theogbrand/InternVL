@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # Script to run batch_processor.py to process batches in screen
-# Usage: AZURE_API_KEY='your-key' ./run_batch_processor.sh [screen_session_name] [batch_start_index] [batch_end_index] [split] [azure_endpoint] [check_interval]
-# Example: AZURE_API_KEY='your-key' ./run_batch_processor.sh verification_processor 3 13 distribute_four https://your-endpoint.openai.azure.com/ 1
+# Usage: AZURE_API_KEY='your-key' ./run_batch_processor.sh [screen_session_name] [batch_start_index] [batch_end_index] [split] [azure_endpoint] [check_interval] [model]
+# Example: AZURE_API_KEY='your-key' ./run_batch_processor.sh batch_processor 3 13 distribute_four https://your-endpoint.openai.azure.com/ 1 gpt-4.1-mini
+# AZURE_API_KEY='blahblahblah' ./run_batch_processor.sh "" "" "" vqav2_4k https://blahblahblah.cognitiveservices.azure.com/ 1 gpt-4.1-nano-3
 
 set -e
 
@@ -13,6 +14,7 @@ END_INDEX="${3}"
 SPLIT="${4:-distribute_four}"
 AZURE_ENDPOINT="${5}"
 CHECK_INTERVAL="${6:-1}"
+MODEL="${7:-gpt-4.1-mini}"
 
 # Build screen session name with format: SCREEN_SESSION_START_END_SPLIT
 SCREEN_SESSION="${SCREEN_SESSION_BASE}"
@@ -22,7 +24,7 @@ fi
 if [[ -n "${END_INDEX}" ]]; then
     SCREEN_SESSION="${SCREEN_SESSION}_${END_INDEX}"
 fi
-SCREEN_SESSION="${SCREEN_SESSION}_${SPLIT}"
+SCREEN_SESSION="${SCREEN_SESSION}_${SPLIT}_${MODEL}"
 
 # Check API key
 if [[ -z "${AZURE_API_KEY}" ]]; then
@@ -32,7 +34,7 @@ if [[ -z "${AZURE_API_KEY}" ]]; then
     echo "  screen_session_name: Name for screen session (default: verification_processor)"
     echo "  batch_start_index: Start batch index, 1-indexed, inclusive (optional)"
     echo "  batch_end_index: End batch index, 1-indexed, inclusive (optional)"
-    echo "  split: Split name (default: distribute_four)"
+    echo "  split: Split name (default: distribute_four), ***coincide to verification_pipeline_outputs dir structure [model]/[split]***" 
     echo "  azure_endpoint: Azure OpenAI endpoint URL (optional)"
     echo "  check_interval: Check interval in minutes (default: 1)"
     echo ""
@@ -44,7 +46,7 @@ if [[ -z "${AZURE_API_KEY}" ]]; then
 fi
 
 # Build Python command with optional arguments
-PYTHON_CMD="python batch_processor.py --split ${SPLIT} --check-interval ${CHECK_INTERVAL}"
+PYTHON_CMD="python batch_processor.py --split ${SPLIT} --check-interval ${CHECK_INTERVAL} --model ${MODEL}"
 
 if [[ -n "${START_INDEX}" ]]; then
     PYTHON_CMD="${PYTHON_CMD} --start-index ${START_INDEX}"
@@ -58,6 +60,9 @@ fi
 if [[ -n "${SPLIT}" ]]; then
     PYTHON_CMD="${PYTHON_CMD} --split ${SPLIT}"
 fi 
+if [[ -n "${MODEL}" ]]; then
+    PYTHON_CMD="${PYTHON_CMD} --model ${MODEL}"
+fi
 
 # Kill existing screen session if it exists
 screen -S "${SCREEN_SESSION}" -X quit 2>/dev/null || true
@@ -72,6 +77,7 @@ screen -S "${SCREEN_SESSION}" -dm bash -c "
     echo 'Batch Processor Configuration:'
     echo '  Split: ${SPLIT}'
     echo '  Check interval: ${CHECK_INTERVAL} minute(s)'
+    echo '  Model: ${MODEL}'
     if [[ -n '${AZURE_ENDPOINT}' ]]; then
         echo '  Azure endpoint: ${AZURE_ENDPOINT}'
     else
@@ -94,6 +100,7 @@ echo "Started screen session: ${SCREEN_SESSION}"
 echo "Configuration:"
 echo "  Split: ${SPLIT}"
 echo "  Check interval: ${CHECK_INTERVAL} minute(s)"
+echo "  Model: ${MODEL}"
 if [[ -n "${AZURE_ENDPOINT}" ]]; then
     echo "  Azure endpoint: ${AZURE_ENDPOINT}"
 else
