@@ -104,7 +104,7 @@ class BatchProcessor:
         
         # Generate log filename with timestamp and split
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = log_dir / f"batch_processor_{self.split}_{timestamp}.log"
+        log_file = log_dir / f"verification_processor_{self.split}_{timestamp}.log"
         
         # Configure logging
         self.logger = logging.getLogger(f"BatchProcessor_{self.split}_{timestamp}")
