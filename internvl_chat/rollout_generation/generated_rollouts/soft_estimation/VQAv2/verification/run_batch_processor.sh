@@ -3,6 +3,7 @@
 # Script to run batch_processor.py to process batches in screen
 # Usage: AZURE_API_KEY='your-key' ./run_batch_processor.sh [screen_session_name] [batch_start_index] [batch_end_index] [split] [azure_endpoint] [check_interval] [model]
 # Example: AZURE_API_KEY='your-key' ./run_batch_processor.sh batch_processor 3 13 distribute_four https://your-endpoint.openai.azure.com/ 1 gpt-4.1-mini
+# AZURE_API_KEY='blahblahblah' ./run_batch_processor.sh "" "" "" vqav2_4k https://blahblahblah.cognitiveservices.azure.com/ 1 gpt-4.1-nano-3
 
 set -e
 

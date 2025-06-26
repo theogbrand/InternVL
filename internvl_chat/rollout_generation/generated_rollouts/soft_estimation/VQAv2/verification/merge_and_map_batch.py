@@ -443,7 +443,7 @@ def main():
     # Configuration
     split = os.environ.get("SPLIT", "")
     input_folder = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/VQAv2/final_rollout_output/{split}" # TODO: edit this
-    model = "gpt-4.1-mini"
+    model = os.environ.get("MODEL", "gpt-4.1-mini")
     output_dir = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/VQAv2/verification/verification_pipeline_outputs/{model}/{split}"
     merged_file = os.path.join(output_dir, "merged_rollout_batches_output.jsonl")
     batch_output_dir = os.path.join(output_dir, "verification_batches")
@@ -549,11 +549,15 @@ def main():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Merge and prepare JSONL files for batch verification')
     parser.add_argument('--split', type=str, help='Split name (overrides SPLIT environment variable, default: distribute_four)')
+    parser.add_argument('--model', type=str, help='Model name (overrides MODEL environment variable, default: gpt-4.1-mini)')
     
     args = parser.parse_args()
     
     # Set split from command line if provided
     if args.split:
         os.environ['SPLIT'] = args.split
+    
+    if args.model:
+        os.environ['MODEL'] = args.model
     
     main()
