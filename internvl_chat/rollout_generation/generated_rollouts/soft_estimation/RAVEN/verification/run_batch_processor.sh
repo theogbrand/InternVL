@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script to run batch_processor.py to process batches in screen
-# Usage: AZURE_API_KEY='your-key' ./run_batch_processor.sh [screen_session_name] [start_index] [end_index] [split] [azure_endpoint] [check_interval]
+# Usage: AZURE_API_KEY='your-key' ./run_batch_processor.sh [screen_session_name] [batch_start_index] [batch_end_index] [split] [azure_endpoint] [check_interval]
 # Example: AZURE_API_KEY='your-key' ./run_batch_processor.sh batch_processor 3 13 distribute_four https://your-endpoint.openai.azure.com/ 1
 
 set -e
@@ -27,11 +27,11 @@ SCREEN_SESSION="${SCREEN_SESSION}_${SPLIT}"
 # Check API key
 if [[ -z "${AZURE_API_KEY}" ]]; then
     echo "Error: Set AZURE_API_KEY environment variable"
-    echo "Usage: AZURE_API_KEY='your-key' ./run_batch_processor.sh [screen_session_name] [start_index] [end_index] [split] [azure_endpoint] [check_interval]"
+    echo "Usage: AZURE_API_KEY='your-key' ./run_batch_processor.sh [screen_session_name] [batch_start_index] [batch_end_index] [split] [azure_endpoint] [check_interval]"
     echo "Parameters:"
     echo "  screen_session_name: Name for screen session (default: batch_processor)"
-    echo "  start_index: Start batch index (optional)"
-    echo "  end_index: End batch index (optional)"
+    echo "  batch_start_index: Start batch index, 1-indexed, inclusive (optional)"
+    echo "  batch_end_index: End batch index, 1-indexed, inclusive (optional)"
     echo "  split: Split name (default: distribute_four)"
     echo "  azure_endpoint: Azure OpenAI endpoint URL (optional)"
     echo "  check_interval: Check interval in minutes (default: 1)"

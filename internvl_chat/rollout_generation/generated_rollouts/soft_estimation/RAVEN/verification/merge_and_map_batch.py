@@ -260,7 +260,7 @@ def calculate_batch_requirements(total_lines: int, avg_tokens_per_line: float, m
     }
 
 
-def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_batch: int, total_batches: int) -> List[str]:
+def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_batch: int, total_batches: int, model: str = "o4-mini") -> List[str]:
     """Split merged JSONL file into separate batch files, transforming to OpenAI batch API format."""
     
     # Resolve paths
@@ -322,7 +322,7 @@ def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_
                         "method": "POST",
                         "url": "/chat/completions",
                         "body": {
-                            "model": "o4-mini",
+                            "model": model,
                             "messages": [
                                 {
                                     "role": "user",
@@ -392,15 +392,65 @@ def split_jsonl_into_batches(merged_file: str, batch_output_dir: str, lines_per_
     return batch_files
 
 
+def check_batch_file_sizes(batch_output_dir: str, max_file_size_bytes: int = 200_000_000) -> None:
+    """Check that all JSONL files in verification_batches directory are under the size limit."""
+    
+    batch_dir = Path(batch_output_dir).resolve()
+    
+    print(f"\nStep 5: Checking batch file sizes...")
+    print(f"Batch directory: {batch_dir}")
+    print(f"Maximum file size: {max_file_size_bytes:,} bytes ({max_file_size_bytes / 1_000_000:.0f} MB)")
+    
+    if not batch_dir.exists():
+        raise FileNotFoundError(f"Batch directory {batch_dir} does not exist")
+    
+    # Find all JSONL files
+    jsonl_files = list(batch_dir.glob("*.jsonl"))
+    
+    if not jsonl_files:
+        raise FileNotFoundError(f"No JSONL files found in {batch_dir}")
+    
+    oversized_files = []
+    total_size = 0
+    
+    for jsonl_file in jsonl_files:
+        file_size = jsonl_file.stat().st_size
+        total_size += file_size
+        
+        print(f"  {jsonl_file.name}: {file_size:,} bytes ({file_size / 1_000_000:.1f} MB)")
+        
+        if file_size > max_file_size_bytes:
+            oversized_files.append({
+                'file': str(jsonl_file),
+                'size': file_size,
+                'size_mb': file_size / 1_000_000
+            })
+    
+    print(f"\nTotal files checked: {len(jsonl_files)}")
+    print(f"Total size: {total_size:,} bytes ({total_size / 1_000_000:.1f} MB)")
+    
+    if oversized_files:
+        error_msg = f"❌ ERROR: {len(oversized_files)} file(s) exceed the {max_file_size_bytes:,} byte limit:\n"
+        for file_info in oversized_files:
+            error_msg += f"  - {Path(file_info['file']).name}: {file_info['size']:,} bytes ({file_info['size_mb']:.1f} MB)\n"
+        error_msg += f"\nReduce lines_per_batch to create smaller files."
+        raise ValueError(error_msg)
+    
+    print(f"✅ All {len(jsonl_files)} batch files are under the {max_file_size_bytes:,} byte limit")
+
+
 def main():
     # Configuration
-    split = "distribute_nine_last"
+    split = os.environ.get("SPLIT", "")
     input_folder = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/final_output/{split}"
     output_dir = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs/{split}"
-    merged_file = os.path.join(output_dir, "merged_batch_output.jsonl")
+    merged_file = os.path.join(output_dir, "merged_rollout_batches_output.jsonl")
     batch_output_dir = os.path.join(output_dir, "verification_batches")
-    sample_size = 1000
-    
+    sample_size = 1000 # for averaging the number of tokens per JSONL object response
+    max_tokens_per_batch = 130_000_000
+    max_file_size_bytes = 200_000_000
+    model = "o4-mini"
+
     print(f"🎯 Using split: {split}")
     print(f"📂 Input folder: {input_folder}")
     print(f"📂 Output directory: {output_dir}")
@@ -433,10 +483,10 @@ def main():
     print("\n" + "="*50 + "\n")
     
     # Step 3: Calculate batch requirements from merged file
-    print("Step 3: Calculating batch requirements (100M token limit)...")
+    print(f"Step 3: Calculating batch requirements ({max_tokens_per_batch} token limit)...")
     try:
         total_lines = count_total_lines(merged_file)
-        batch_requirements = calculate_batch_requirements(total_lines, avg_tokens, max_tokens_per_batch=100_000_000)
+        batch_requirements = calculate_batch_requirements(total_lines, avg_tokens, max_tokens_per_batch=max_tokens_per_batch)
         
         # Save batch requirements to file
         batch_info_file = os.path.join(output_dir, "batch_requirements.json")
@@ -461,7 +511,8 @@ def main():
             merged_file=merged_file,
             batch_output_dir=batch_output_dir,
             lines_per_batch=batch_requirements['lines_per_batch'],
-            total_batches=batch_requirements['total_batches']
+            total_batches=batch_requirements['total_batches'],
+            model=model
         )
         
         # Save batch file list
@@ -482,6 +533,17 @@ def main():
     except Exception as e:
         print(f"Error during batch file creation: {e}")
         return
+    
+    print("\n" + "="*50 + "\n")
+    
+    # Step 5: Check batch file sizes
+    try:
+        check_batch_file_sizes(batch_output_dir, max_file_size_bytes)
+    except Exception as e:
+        print(f"Error during file size validation: {e}")
+        return
+    
+    print(f"\n🎯 Pipeline completed successfully!")
 
 
 if __name__ == "__main__":
