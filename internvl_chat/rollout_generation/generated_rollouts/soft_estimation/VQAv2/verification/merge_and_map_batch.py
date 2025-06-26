@@ -75,10 +75,10 @@ def local_image_to_data_url(image_path):
 
 
 def extract_content_from_data(data: Dict[str, Any]) -> Dict[str, str]:
-    """Extract text content from response key and image path from combined_image_path key."""
+    """Extract text content from response key and image path from image_path key."""
     response = data.get('response', '').strip()
     question = data.get('question', '').strip()
-    image_path = data.get('combined_image_path', '').strip()
+    image_path = data.get('image_path', '').strip()
     
     try:
         if not isinstance(response, str) or not response.strip():
@@ -86,7 +86,7 @@ def extract_content_from_data(data: Dict[str, Any]) -> Dict[str, str]:
         if not isinstance(question, str) or not question.strip():
             raise ValueError("No text found in key 'question'")
         if not isinstance(image_path, str) or not image_path.strip():
-            raise ValueError("No image path found in key 'combined_image_path'")
+            raise ValueError("No image path found in key 'image_path'")
     except ValueError as e:
         raise e
     
@@ -442,12 +442,12 @@ def check_batch_file_sizes(batch_output_dir: str, max_file_size_bytes: int = 200
 def main():
     # Configuration
     split = os.environ.get("SPLIT", "")
-    input_folder = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/final_rollout_output/{split}"
-    output_dir = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/RAVEN/verification/verification_pipeline_outputs/{split}"
+    input_folder = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/VQAv2/final_rollout_output/{split}" # TODO: edit this
+    output_dir = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/VQAv2/verification/verification_pipeline_outputs/{split}"
     merged_file = os.path.join(output_dir, "merged_rollout_batches_output.jsonl")
     batch_output_dir = os.path.join(output_dir, "verification_batches")
     sample_size = 1000 # for averaging the number of tokens per JSONL object response
-    max_tokens_per_batch = 130_000_000
+    max_tokens_per_batch = 100_000_000
     max_file_size_bytes = 200_000_000
     model = "o4-mini"
 
