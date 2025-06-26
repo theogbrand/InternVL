@@ -589,7 +589,10 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     all_batches = [mc_task_queue[i:i+throughput_batch_size] for i in range(0, total_mc_tasks, throughput_batch_size)]
     
     # Output file for streaming saves
-    output_file = os.path.join(args['out_dir'], f'{args["dataset_name"]}_raven_rollouts_{args["sample_start_idx"]}_{args["sample_end_idx"]}_streaming.jsonl')
+    # Ensure output directory exists
+    output_file_dir = os.path.join(args['out_dir'], args['dataset_name'])
+    os.makedirs(output_file_dir, exist_ok=True)
+    output_file = os.path.join(output_file_dir, f'{args["dataset_name"]}_raven_rollouts_{args["sample_start_idx"]}_{args["sample_end_idx"]}_streaming.jsonl')
     completed_rollouts = 0
     
     logger.info(f"Starting time-based MC processing with streaming saves ({throughput_batch_size} RPM rate limit)")
@@ -901,7 +904,7 @@ args = {
     'batch_size': 10,  # ~20 samples per batch
     'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
     'sample_start_idx': 1,
-    'sample_end_idx': 3,
+    'sample_end_idx': 1,
     'prompt_format_version': 'raven_v2',
     'scoring_mode': 'raven_score_alphabet_only',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
@@ -927,7 +930,9 @@ def main():
     # Setup logging
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    logs_dir = os.path.join(args['out_dir'], f"{args['dataset_name']}_rollout_logs")
+    # Keep logs in dataset subdirectory for organization
+    dataset_dir = os.path.join(args['out_dir'], args['dataset_name'])
+    logs_dir = os.path.join(dataset_dir, f"{args['dataset_name']}_rollout_logs")
     os.makedirs(logs_dir, exist_ok=True)
 
     log_filename = f"{args['dataset_name']}_rollout_{timestamp}_samples_{args['sample_start_idx']}_{args['sample_end_idx']}.txt"
@@ -1116,7 +1121,8 @@ def main():
     logger.info(f"\nProcessed {len(dataset)} input samples via streaming pipeline")
 
     # Final save confirmation (data already saved incrementally via streaming)
-    output_file = os.path.join(args['out_dir'], f'{args["dataset_name"]}_raven_rollouts_id_{args["sample_start_idx"]}_to_{args["sample_end_idx"]}_streaming.jsonl')
+    output_file_dir = os.path.join(args['out_dir'], args['dataset_name'])
+    output_file = os.path.join(output_file_dir, f'{args["dataset_name"]}_raven_rollouts_{args["sample_start_idx"]}_{args["sample_end_idx"]}_streaming.jsonl')
     logger.info(f"All rollouts saved incrementally to {output_file}")
 
     # Print timing statistics
@@ -1149,12 +1155,6 @@ def main():
     logger.info(f"\nSummary Statistics:")
     logger.info(f"Total input samples processed: {len(dataset)}")
     logger.info(f"Expected total rollouts: {len(dataset) * args['num_return_sequences']}")
-    logger.info(f"All rollout statistics available in output file")
-
-    logger.info("RAVEN rollout generation completed successfully with OPTIMIZED THROUGHPUT")
-    logger.info(f"✓ Phase 1: Conservative RPM utilization for initial rollouts")
-    logger.info(f"✓ Phase 2: All MC tasks processed independently with optimized parallelization")
-    logger.info(f"✓ Both phases optimized for 500 RPM sustained throughput")
     logger.info(f"Log saved to: {log_filepath}")
 
 if __name__ == "__main__":
