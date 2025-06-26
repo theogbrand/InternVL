@@ -716,7 +716,7 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
     if args.get('debug_granular', False) and rollout_idx < args.get('debug_max_rollouts', 5):
         logger.debug(f"BUILDING OUTPUT FOR ROLLOUT {rollout_idx}:")
         logger.debug(f"  Total steps: {len(rollout_meta['steps'])}")
-        logger.debug(f"  GT Answer: {rollout_meta['item']['answer']}")
+        logger.debug(f"  GT Answer: {rollout_meta['item']['correct_answer']}")
     
     for step_idx in range(len(rollout_meta['steps'])):
         # Collect MC results for this step
@@ -901,7 +901,7 @@ args = {
     'batch_size': 10,  # ~20 samples per batch
     'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
     'sample_start_idx': 1,
-    'sample_end_idx': 1143,
+    'sample_end_idx': 3,
     'prompt_format_version': 'raven_v2',
     'scoring_mode': 'raven_score_alphabet_only',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
@@ -1086,7 +1086,7 @@ def main():
             if sample_idx == 0:
                 logger.info(f"\n[{localtime()}] First sample processing details:")
                 logger.info(f"Image path: {sample['image_path']}")
-                logger.info(f"Correct answer: {sample['item']['answer']}")
+                logger.info(f"Correct answer: {sample['item']['correct_answer']}")
                 logger.info(f"Batch processing time: {batch_duration:.2f} seconds")
                 logger.info(f"Average sample time: {avg_sample_time:.2f} seconds")
                 logger.info(f"Outputs saved incrementally via streaming pipeline")
