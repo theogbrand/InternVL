@@ -39,8 +39,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbnf5lgw-italynorth.cognitiveservices.azure.com/"
-deployment = "gpt-4.1-20"
+endpoint = "https://dalle-declare.openai.azure.com/"
+deployment = "gpt-4.1"
 
 api_version = "2025-01-01-preview"
 
@@ -904,8 +904,8 @@ args = {
     'out_dir': 'raven_rollouts_output',
     'batch_size': 10,  # ~20 samples per batch
     'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
-    'sample_start_idx': 5716,
-    'sample_end_idx': 6858,
+    'sample_start_idx': 6859,
+    'sample_end_idx': 8000,
     'prompt_format_version': 'raven_v2',
     'scoring_mode': 'raven_score_alphabet_only',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
