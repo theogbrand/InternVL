@@ -73,8 +73,27 @@ Endpoint 26: IDs 8038-8358 (321 samples)
 Endpoint 27: IDs 8359-8679 (321 samples)
 Endpoint 28: IDs 8680-9000 (321 samples)
 
-# Verification
-1. merge_and_map_batch.py to merge the rollouts into a single jsonl file
-2. ./run_batch_processor.sh to verify the rollouts, checking for parameters in batch_processor.py
+RAVEN round #2
+
+Round 1 (Files 1 & 2):
+
+File 1 (Endpoints 1-7):
+
+Endpoint 1: 1-1143
+Endpoint 2: 1144-2286
+Endpoint 3: 2287-3429
+Endpoint 4: 3430-4572
+Endpoint 5: 4573-5715
+Endpoint 6: 5716-6858
+Endpoint 7: 6859-8000
+File 2 (Endpoints 8-14):
+
+Endpoint 8: 1-1143
+Endpoint 9: 1144-2286
+Endpoint 10: 2287-3429
+Endpoint 11: 3430-4572
+Endpoint 12: 4573-5715
+Endpoint 13: 5716-6858
+Endpoint 14: 6859-8000
 
 Checks every minute if batch is done, if done, kick off next batch for verification.
