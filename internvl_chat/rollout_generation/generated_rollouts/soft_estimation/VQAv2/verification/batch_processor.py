@@ -705,7 +705,7 @@ class BatchProcessor:
             self.logger.info(f"[{self.processor_id}] Note: Only cancelled batches submitted by this processor instance")
             print("ℹ️  Note: Only cancelled batches submitted by this processor instance")
 
-def main(check_interval_minutes: int = 1, start_index: int = None, end_index: int = None, split: str = None, azure_endpoint: str = None):
+def main(check_interval_minutes: int = 1, start_index: int = None, end_index: int = None, split: str = None, azure_endpoint: str = None, model: str = None):
     """Main entry point."""
     if not split:
         raise ValueError("Split parameter must be provided")
@@ -717,7 +717,7 @@ def main(check_interval_minutes: int = 1, start_index: int = None, end_index: in
     print(f"🌐 Using Azure endpoint: {endpoint}")
     
     processor = BatchProcessor(
-        verification_batches_dir=f"verification_pipeline_outputs/{split}/verification_batches",
+        verification_batches_dir=f"verification_pipeline_outputs/{model}/{split}/verification_batches",
         max_retries=10,
         azure_endpoint=endpoint,
         api_key=os.getenv("AZURE_API_KEY"),  # or provide directly
@@ -740,6 +740,7 @@ if __name__ == "__main__":
     parser.add_argument('--check-interval', type=int, default=1, help='Check interval in minutes (default: 1)')
     parser.add_argument('--split', type=str, required=True, help='Split name (required parameter)')
     parser.add_argument('--azure-endpoint', type=str, help='Azure OpenAI endpoint URL (optional)')
+    parser.add_argument('--model', type=str, required=True, help='Model name (required parameter)')
     
     args = parser.parse_args()
     
@@ -751,4 +752,4 @@ if __name__ == "__main__":
     
     print(f"🎯 Using split: {args.split}")
     
-    main(args.check_interval, args.start_index, args.end_index, args.split, args.azure_endpoint) 
+    main(args.check_interval, args.start_index, args.end_index, args.split, args.azure_endpoint, args.model)

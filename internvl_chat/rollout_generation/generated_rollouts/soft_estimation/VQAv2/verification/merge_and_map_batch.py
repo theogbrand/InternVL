@@ -443,13 +443,13 @@ def main():
     # Configuration
     split = os.environ.get("SPLIT", "")
     input_folder = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/VQAv2/final_rollout_output/{split}" # TODO: edit this
-    output_dir = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/VQAv2/verification/verification_pipeline_outputs/{split}"
+    model = "gpt-4.1-mini"
+    output_dir = f"/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/generated_rollouts/soft_estimation/VQAv2/verification/verification_pipeline_outputs/{model}/{split}"
     merged_file = os.path.join(output_dir, "merged_rollout_batches_output.jsonl")
     batch_output_dir = os.path.join(output_dir, "verification_batches")
     sample_size = 1000 # for averaging the number of tokens per JSONL object response
     max_tokens_per_batch = 100_000_000
     max_file_size_bytes = 200_000_000
-    model = "o4-mini"
 
     print(f"🎯 Using split: {split}")
     print(f"📂 Input folder: {input_folder}")
