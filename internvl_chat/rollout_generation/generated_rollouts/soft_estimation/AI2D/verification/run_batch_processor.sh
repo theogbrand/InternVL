@@ -34,7 +34,7 @@ if [[ -z "${AZURE_API_KEY}" ]]; then
     echo "  screen_session_name: Name for screen session (default: verification_processor)"
     echo "  batch_start_index: Start batch index, 1-indexed, inclusive (optional)"
     echo "  batch_end_index: End batch index, 1-indexed, inclusive (optional)"
-    echo "  split: Split name (default: distribute_four), ***coincide to verification_pipeline_outputs dir structure [model]/[split]***" 
+    echo "  split: Split name (default: distribute_four), ***coincide to verification_pipeline_outputs dir structure [model]/[split_name] in verification_pipeline_outputs dir***" 
     echo "  azure_endpoint: Azure OpenAI endpoint URL (optional)"
     echo "  check_interval: Check interval in minutes (default: 1)"
     echo ""

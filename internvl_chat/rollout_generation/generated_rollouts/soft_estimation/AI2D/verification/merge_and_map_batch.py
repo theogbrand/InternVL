@@ -448,7 +448,7 @@ def main():
     merged_file = os.path.join(output_dir, "merged_rollout_batches_output.jsonl")
     batch_output_dir = os.path.join(output_dir, "verification_batches")
     sample_size = 1000 # for averaging the number of tokens per JSONL object response
-    max_tokens_per_batch = 115_000_000
+    max_tokens_per_batch = 110_000_000
     max_file_size_bytes = 200_000_000
 
     print(f"🎯 Using split: {split}")
