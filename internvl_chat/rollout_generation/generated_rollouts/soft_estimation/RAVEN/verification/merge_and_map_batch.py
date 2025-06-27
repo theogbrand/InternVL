@@ -448,7 +448,7 @@ def main():
     merged_file = os.path.join(output_dir, "merged_rollout_batches_output.jsonl")
     batch_output_dir = os.path.join(output_dir, "verification_batches")
     sample_size = 1000 # for averaging the number of tokens per JSONL object response
-    max_tokens_per_batch = 130_000_000
+    max_tokens_per_batch = 115_000_000
     max_file_size_bytes = 200_000_000
 
     print(f"🎯 Using split: {split}")
@@ -549,7 +549,8 @@ def main():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Merge and prepare JSONL files for batch verification')
     parser.add_argument('--split', type=str, help='Split name (overrides SPLIT environment variable, default: distribute_four)')
-    parser.add_argument('--model', type=str, help='Model name (overrides MODEL environment variable, default: gpt-4.1-mini)')
+    # actually is deployment name, so could sound like gpt-4.1-nano-2
+    parser.add_argument('--model', type=str, help='Model name (overrides MODEL environment variable, default: gpt-4.1-mini)') 
     
     args = parser.parse_args()
     
@@ -561,3 +562,5 @@ if __name__ == "__main__":
         os.environ['MODEL'] = args.model
     
     main()
+    # TODO: Edit directory above for input_folder and output_dir in main function
+# ```python merge_and_map_batch.py --split="vqav2_4k" --model="gpt-4.1-nano-3"```
