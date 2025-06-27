@@ -9,7 +9,6 @@ verification_prompt = r"""I will provide an abstract visual reasoning problem al
 [Solution]
 
 <solution>
-```
 [Perception]
 <step_1>
 ...(Step 1 of step-by-step perception)...
@@ -18,9 +17,9 @@ verification_prompt = r"""I will provide an abstract visual reasoning problem al
 ...(Step 2 of step-by-step perception)...
 </step_2>
 ...
-<step_n>
-...(Step n of step-by-step perception)...
-</step_n>
+<step_m>
+...(Step m of step-by-step perception)...
+</step_m>
 
 [Reasoning]
 <step_1>
@@ -30,19 +29,17 @@ verification_prompt = r"""I will provide an abstract visual reasoning problem al
 ...(Step 2 of step-by-step reasoning)...
 </step_2>
 ...
-<step_m>
-...(Step m of step-by-step reasoning)...
-</step_m>
+<step_n>
+...(Step n of step-by-step reasoning)...
+</step_n>
 
 <correct_answer>
-...(Clearly state which of the 8 candidate images is the best candidate image as the missing tile to complete the matrix. If the candidates are numbered, lettered, or can be uniquely described, use that identifier.)...
+...(The provided answer to the abstract visual reasoning problem)...
 </correct_answer>
-```
 </solution>
 
-Your task is to review each paragraph of the solution in sequence, analyzing, verifying, and critiquing the reasoning in detail. You need to provide the analyses and the conclusion in the following format:
+Your task is to review each paragraph of the solution in sequence, analyzing, verifying, and critiquing the visual elements perception and reasoning in detail. You need to provide the analyses and the conclusion in the following format:
 
-```
 [Perception]
 <analysis_1>
 ...(analysis of step 1)...
@@ -69,11 +66,20 @@ Your task is to review each paragraph of the solution in sequence, analyzing, ve
 Correct/Incorrect
 </conclusion>
 
-* When you analyze each paragraph, you should use proper verification, recalculation, or reflection to indicate whether it is logically and mathematically valid. Please carefully go through this process carefully.
+* When you analyze each step, you should use proper logical or perceptual verification as appropriate, or reflection to indicate whether it is logically and perceptually valid. Please carefully go through this process.
 
-* If an error is detected in any paragraph, you should describe the nature and cause of the error in detail, and suggest how to correct the error or the correct approach. The paragraph is found to contain an error, stop further analysis of subsequent paragraphs (as they may depend on the identified error) and directly provide the conclusion of "Incorrect."
+* Each analysis should:
+- Check if the described pattern/rule is actually present
+- Verify the logical consistency of the step
+- Confirm that conclusions follow from observations
 
-For instance, given a solution of five paragraphs, if an error is found in the third paragraph, you should reply in the following format:
+* If an error is detected in any step, you should describe the nature and cause of the error in detail, and suggest how to correct the error or the correct approach. 
+
+* When the step is found to contain an error, stop further analysis of subsequent steps (as they may depend on the identified error) and directly provide the conclusion of "Incorrect" in the <conclusion> tag.
+
+* Only material reasoning or perception errors should trigger the early termination of the analysis.
+
+* For instance, given a solution of five steps, if an error is found in the third step, you should reply in the following format:
 
 <analysis_1>
 ...(analysis of step 1)...
@@ -91,11 +97,11 @@ For instance, given a solution of five paragraphs, if an error is found in the t
 Incorrect
 </conclusion>
 
-Note that the analyses of paragraphs 4 and 5 should be skipped as the paragraph 3 has been found to contain an error.
+* Note that the analyses of steps 4 and 5 is skipped as step 3 has been found to contain an error.
 
-* Respond with your analyses and conclusion directly.
 ------------------------------------------------------------
-The following is the abstract visual reasoning problem and the solution for your task:
+
+The following is the abstract visual reasoning problem and its corresponding solution, for you to review and verify:
 
 [Abstract Visual Reasoning Problem]
  <abstract_visual_reasoning_problem>
@@ -107,4 +113,5 @@ The following is the abstract visual reasoning problem and the solution for your
 {{SOLUTION}}
 </solution>
 
-Now proceed with the task."""
+Remember:
+- The <conclusion> tag must contain either Correct or Incorrect, with no additional text or punctuation."""
