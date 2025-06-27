@@ -40,7 +40,7 @@ verification_prompt = r"""I will provide a visual reasoning problem along with a
 </solution>
 ```
 
-Your task is to review each paragraph of the solution in sequence, analyzing, verifying, and critiquing the reasoning in detail. You need to provide the analyses and the conclusion in the following format:
+Your task is to review each paragraph of the solution in sequence, analyzing, verifying, and critiquing the visual elements perception and reasoning in detail. You need to provide the analyses and the conclusion in the following format:
 
 [Visual Elements]
 <analysis_1>
