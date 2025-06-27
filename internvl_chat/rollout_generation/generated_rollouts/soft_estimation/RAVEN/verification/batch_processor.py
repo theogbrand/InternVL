@@ -29,12 +29,12 @@ class BatchJob(BaseModel):
 class BatchProcessor:
     def __init__(self, verification_batches_dir: str = "verification_batches", 
                  max_retries: int = 10, azure_endpoint: str = None, api_key: str = None,
-                 start_index: int = None, end_index: int = None, split: str = None):
+                 start_index: int = None, end_index: int = None, split: str = None, model: str = None):
         # Store split first as it's needed for logging setup
         if not split:
             raise ValueError("Split parameter must be provided")
         self.split = split
-        
+        self.model = model
         # Set up logging (now that split is available)
         self._setup_logging()
         
@@ -80,7 +80,7 @@ class BatchProcessor:
         self.logger.info("="*80)
         self.logger.info("BATCH PROCESSOR CONFIGURATION")
         self.logger.info("="*80)
-        self.logger.info(f"🎯 SPLIT: {self.split}")
+        self.logger.info(f"�� SPLIT: {self.split} | MODEL: {self.model}")
         self.logger.info(f"🌐 AZURE_ENDPOINT: {endpoint}")
         self.logger.info(f"📋 PROCESSOR_ID: {self.processor_id}")
         self.logger.info(f"⏱️ API TIMEOUTS: connect={timeout.connect}s, read={timeout.read}s, write={timeout.write}s")
@@ -88,6 +88,7 @@ class BatchProcessor:
         self.logger.info("="*80)
         self.logger.info(f"BatchProcessor initialized:")
         self.logger.info(f"  - Split: {self.split}")
+        self.logger.info(f"  - Model: {self.model}")
         self.logger.info(f"  - Processor ID: {self.processor_id}")
         self.logger.info(f"  - Endpoint: {endpoint}")
         self.logger.info(f"  - Batches directory: {self.verification_batches_dir}")
@@ -104,10 +105,10 @@ class BatchProcessor:
         
         # Generate log filename with timestamp and split
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = log_dir / f"batch_processor_{self.split}_{timestamp}.log"
+        log_file = log_dir / f"verification_processor_{self.split}_{self.model}_{timestamp}.log"
         
         # Configure logging
-        self.logger = logging.getLogger(f"BatchProcessor_{self.split}_{timestamp}")
+        self.logger = logging.getLogger(f"BatchProcessor_{self.split}_{self.model}_{timestamp}")
         self.logger.setLevel(logging.INFO)
         
         # Create formatter
@@ -543,7 +544,7 @@ class BatchProcessor:
             self.logger.info("="*80)
             self.logger.info("STARTING SEQUENTIAL BATCH PROCESSING")
             self.logger.info("="*80)
-            self.logger.info(f"🎯 PROCESSING SPLIT: {self.split}")
+            self.logger.info(f"🎯 PROCESSING SPLIT: {self.split} | MODEL: {self.model}")
             self.logger.info(f"🌐 USING ENDPOINT: {self.azure_endpoint}")
             self.logger.info(f"📋 PROCESSOR ID: {self.processor_id}")
             self.logger.info("="*80)
@@ -621,7 +622,7 @@ class BatchProcessor:
         self.logger.info("="*80)
         self.logger.info("SEQUENTIAL PROCESSING COMPLETE")
         self.logger.info("="*80)
-        self.logger.info(f"🎯 COMPLETED SPLIT: {self.split}")
+        self.logger.info(f"🎯 COMPLETED SPLIT: {self.split} | MODEL: {self.model}")
         self.logger.info(f"🌐 USED ENDPOINT: {self.azure_endpoint}")
         self.logger.info(f"📋 PROCESSOR ID: {self.processor_id}")
         self.logger.info("="*80)
@@ -633,7 +634,7 @@ class BatchProcessor:
         print("\n" + "="*50)
         print("🏁 SEQUENTIAL PROCESSING COMPLETE")
         print("="*50)
-        print(f"🎯 Split: {self.split}")
+        print(f"🎯 Split: {self.split} | Model: {self.model}")
         print(f"🌐 Endpoint: {self.azure_endpoint}")
         print(f"📊 Total files: {total_files}")
         print(f"✅ Completed: {len(self.completed_jobs)}")
@@ -658,7 +659,7 @@ class BatchProcessor:
         
         self.logger.info("="*80)
         self.logger.info("SEQUENTIAL PROCESSING LOG COMPLETE")
-        self.logger.info(f"🎯 FINAL SPLIT: {self.split}")
+        self.logger.info(f"🎯 FINAL SPLIT: {self.split} | MODEL: {self.model}")
         self.logger.info(f"🌐 FINAL ENDPOINT: {self.azure_endpoint}")
         self.logger.info("="*80)
 
@@ -705,7 +706,7 @@ class BatchProcessor:
             self.logger.info(f"[{self.processor_id}] Note: Only cancelled batches submitted by this processor instance")
             print("ℹ️  Note: Only cancelled batches submitted by this processor instance")
 
-def main(check_interval_minutes: int = 1, start_index: int = None, end_index: int = None, split: str = None, azure_endpoint: str = None):
+def main(check_interval_minutes: int = 1, start_index: int = None, end_index: int = None, split: str = None, azure_endpoint: str = None, model: str = None):
     """Main entry point."""
     if not split:
         raise ValueError("Split parameter must be provided")
@@ -713,17 +714,18 @@ def main(check_interval_minutes: int = 1, start_index: int = None, end_index: in
     # Use provided endpoint or default
     endpoint = azure_endpoint or "https://decla-mbncunfi-australiaeast.cognitiveservices.azure.com/"
     
-    print(f"🎯 Starting batch processing for split: {split}")
+    print(f"🎯 Starting batch processing for split: {split} | model: {model}")
     print(f"🌐 Using Azure endpoint: {endpoint}")
     
     processor = BatchProcessor(
-        verification_batches_dir=f"verification_pipeline_outputs/{split}/verification_batches",
+        verification_batches_dir=f"verification_pipeline_outputs/{model}/{split}/verification_batches",
         max_retries=10,
         azure_endpoint=endpoint,
         api_key=os.getenv("AZURE_API_KEY"),  # or provide directly
         start_index=start_index,
         end_index=end_index,
-        split=split
+        split=split,
+        model=model
     )
     
     try:
@@ -740,6 +742,7 @@ if __name__ == "__main__":
     parser.add_argument('--check-interval', type=int, default=1, help='Check interval in minutes (default: 1)')
     parser.add_argument('--split', type=str, required=True, help='Split name (required parameter)')
     parser.add_argument('--azure-endpoint', type=str, help='Azure OpenAI endpoint URL (optional)')
+    parser.add_argument('--model', type=str, required=True, help='Model name (required parameter)')
     
     args = parser.parse_args()
     
@@ -751,4 +754,4 @@ if __name__ == "__main__":
     
     print(f"🎯 Using split: {args.split}")
     
-    main(args.check_interval, args.start_index, args.end_index, args.split, args.azure_endpoint) 
+    main(args.check_interval, args.start_index, args.end_index, args.split, args.azure_endpoint, args.model)
