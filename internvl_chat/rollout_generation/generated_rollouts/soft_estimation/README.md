@@ -1,7 +1,7 @@
 # Rolling Out
 
 1. Transfer all images and their absolute paths to preprocessing_scripts/{dataset_name}
-2. Specify the endpoints, deployment and config in rollout.py THEN ./run_rollout.sh to generate rollouts
+2. Specify the endpoints, deployment and config (for input file path, 1-indexed sample_start_idx, sample_end_idx and output directory) in rollout.py THEN ./run_rollout.sh (no parameters) to generate rollouts
     - edit check_answer function in rollout.py to match the answer format of the dataset (for RAVEN, option 1-8 ONLY, integer only matching for MMPR correctness prompts, GPT answer checking for open text)
     - check_answer (set prompt_format_version), parse_answer (set scoring_mode)
 3. Transfer completed rollouts to generated_rollouts/soft_estimation/{dataset_name}/final_output/{split_name}

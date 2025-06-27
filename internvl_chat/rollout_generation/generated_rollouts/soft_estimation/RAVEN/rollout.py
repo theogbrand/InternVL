@@ -900,12 +900,12 @@ args = {
     'endpoint': endpoint,
     'deployment': deployment,
     'api_version': api_version,
-    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/last_four_jsonl/left_center_single_right_center_single_train.jsonl', # 4 separate files
+    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/RAVEN/raven_processed_jsonl/last_four_jsonl/up_center_single_down_center_single_train.jsonl', # 4 separate files
     'out_dir': 'raven_rollouts_output',
     'batch_size': 10,  # ~20 samples per batch
     'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
-    'sample_start_idx': 6859,
-    'sample_end_idx': 8000,
+    'sample_start_idx': 1,
+    'sample_end_idx': 800,
     'prompt_format_version': 'raven_v2',
     'scoring_mode': 'raven_score_alphabet_only',
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
