@@ -1,4 +1,4 @@
-verification_prompt = r"""I will provide a visual reasoning problem along with a solution. They will be formatted as follows: 
+verification_prompt = r"""I will provide a visual reasoning problem along with a solution. They will be formatted as follows, where m and n need not be equal: 
 
 ```
 [Visual Reasoning Problem]
@@ -10,17 +10,17 @@ verification_prompt = r"""I will provide a visual reasoning problem along with a
 [Solution]
 
 <solution>
-[Perception]
+[Visual Elements]
 <step_1>
-...(Step 1 of step-by-step perception)...
+...(Step 1 of step-by-step visual elements perception)...
 </step_1>
 <step_2>
-...(Step 2 of step-by-step perception)...
+...(Step 2 of step-by-step visual elements perception)...
 </step_2>
 ...
-<step_n>
-...(Step n of step-by-step perception)...
-</step_n>
+<step_m>
+...(Step m of step-by-step visual elements perception)...
+</step_m>
 
 [Reasoning]
 <step_1>
@@ -30,20 +30,19 @@ verification_prompt = r"""I will provide a visual reasoning problem along with a
 ...(Step 2 of step-by-step reasoning)...
 </step_2>
 ...
-<step_m>
-...(Step m of step-by-step reasoning)...
-</step_m>
+<step_n>
+...(Step n of step-by-step reasoning)...
+</step_n>
 
 <correct_answer>
-...(Clearly state which of the 8 candidate images is the best candidate image as the missing tile to complete the matrix. If the candidates are numbered, lettered, or can be uniquely described, use that identifier.)...
+...(The correct answer to the visual reasoning problem)...
 </correct_answer>
 </solution>
 ```
 
 Your task is to review each paragraph of the solution in sequence, analyzing, verifying, and critiquing the reasoning in detail. You need to provide the analyses and the conclusion in the following format:
 
-```
-[Perception]
+[Visual Elements]
 <analysis_1>
 ...(analysis of step 1)...
 </analysis_1>
@@ -68,17 +67,22 @@ Your task is to review each paragraph of the solution in sequence, analyzing, ve
 <conclusion>
 Correct/Incorrect
 </conclusion>
-```
 
-* When you analyze each paragraph, you should use proper verification, recalculation, or reflection to indicate whether it is logically and mathematically valid. Please carefully go through this process.
+* When you analyze each step, you should use proper logical or perceptual verification as appropriate, or reflection to indicate whether it is logically and perceptually valid. Please carefully go through this process.
 
-* If an error is detected in any paragraph, you should describe the nature and cause of the error in detail, and suggest how to correct the error or the correct approach. 
+* Each analysis should:
+- Check if the described pattern/rule is actually present
+- Verify the logical consistency of the step
+- Confirm that conclusions follow from observations
 
-* When the paragraph is found to contain an error, stop further analysis of subsequent paragraphs (as they may depend on the identified error) and directly provide the conclusion of "Incorrect" in the <conclusion> tag.
+* If an error is detected in any step, you should describe the nature and cause of the error in detail, and suggest how to correct the error or the correct approach. 
 
-* For instance, given a solution of five paragraphs, if an error is found in the third paragraph, you should reply in the following format:
+* When the step is found to contain an error, stop further analysis of subsequent steps (as they may depend on the identified error) and directly provide the conclusion of "Incorrect" in the <conclusion> tag.
 
-```
+* Only material reasoning or perception errors should trigger the early termination of the analysis.
+
+* For instance, given a solution of five steps, if an error is found in the third step, you should reply in the following format:
+
 <analysis_1>
 ...(analysis of step 1)...
 </analysis_1>
@@ -94,9 +98,8 @@ Correct/Incorrect
 <conclusion>
 Incorrect
 </conclusion>
-```
 
-* Note that the analyses of paragraphs 4 and 5 is skipped as paragraph 3 has been found to contain an error.
+* Note that the analyses of steps 4 and 5 is skipped as step 3 has been found to contain an error.
 
 ------------------------------------------------------------
 
@@ -104,7 +107,7 @@ The following is the visual reasoning problem and its corresponding solution, fo
 
 [Visual Reasoning Problem]
  <visual_reasoning_problem>
-{{VISUAL_REASONING_PROBLEM}}
+{{ABSTRACT_VISUAL_REASONING_PROBLEM}}
  </visual_reasoning_problem>
 
 [Solution]
@@ -112,5 +115,5 @@ The following is the visual reasoning problem and its corresponding solution, fo
 {{SOLUTION}}
 </solution>
 
-Remember to:
-- Provide ONLY a single string answer of "Correct"/"Incorrect" in the <conclusion> section and no other text or commentary."""
+Remember:
+- The <conclusion> tag must contain either Correct or Incorrect, with no additional text or punctuation."""
