@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 # Initialize logger early to avoid NameError issues
-logger = logging.getLogger('vqav2_rollout')
+logger = logging.getLogger('PuzzleTest_rollout')
 
 # Add the tools directory to the path
 sys.path.append('/data/users/brandon/ob1-projects/InternVL/internvl_chat/tools')
@@ -54,7 +54,16 @@ shutdown_flag = threading.Event()
 
 def signal_handler(signum, frame):
     """Handle termination signals gracefully"""
-    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    try:
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        # Force immediate flush for critical shutdown message only
+        for handler in logger.handlers:
+            if hasattr(handler, 'flush'):
+                handler.flush()
+    except (NameError, AttributeError):
+        # Logger not configured yet, use print as fallback
+        print(f"Received signal {signum}, initiating graceful shutdown...")
+        sys.stdout.flush()
     shutdown_flag.set()
     # Don't call sys.exit() from signal handler in threaded environment
 
@@ -76,7 +85,7 @@ def local_image_to_data_url(image_path):
     # Construct the data URL
     return f"data:{mime_type};base64,{base64_encoded_data}"
 
-class VQAv2_V1_INT_ONLYDataset(torch.utils.data.Dataset): # also numeric strings like "02393"
+class PuzzleTestDataset(torch.utils.data.Dataset): # also numeric strings like "02393"
     def __init__(
         self,
         data,
@@ -109,7 +118,7 @@ class VQAv2_V1_INT_ONLYDataset(torch.utils.data.Dataset): # also numeric strings
     def __getitem__(self, idx):
         item = json.loads(self.data[idx])
         
-        # VQAv2 dataset structure: image, question, answer, uid, image_path
+        # PuzzleTest dataset structure: dict_keys(['image', 'question', 'answer', 'options', 'caption', 'explanation', 'deduction', 'source_file', 'image_path', 'uid'])
         image_path = item['image_path']
         question = item['question']
         answer = item['answer']
@@ -131,11 +140,11 @@ Here is the question you need to answer:
 Please follow these steps to complete the task:
 
 1. Carefully examine the image, paying attention to:
-   - Objects and scenes present
-   - Geometric shapes (if any)
-   - Attributes of each element (color, size, material, texture, etc.)
-   - Spatial relationships between elements
-   - Any text or numbers visible in the image (read and interpret these carefully)
+   - List and number all visible elements (objects, labels, arrows, text, data visualizations, etc.)
+   - Determine relationships between elements
+   - Interpret any text or numbers present
+   - Consider the document layout and how it affects the information presentation
+   - Identify any temporal or causal relationships
 
 2. Analyze the question to identify the type of reasoning required (e.g., counting, existence check, comparison, attribute query, or relationship assessment).
 
@@ -143,13 +152,13 @@ Please follow these steps to complete the task:
 
 4. Formulate your answer based on your analysis.
 
-5. Present your final answer as a single numeric string in a LaTeX-formatted box using this format: 
+5. Present your final answer as a single string in a LaTeX-formatted box using this format: 
    <correct_answer>
-   $\boxed{numeric_string}$
+   $\boxed{Your answer here}$
    </correct_answer>
 
 Your task is to: 
-- Under the [Visual Elements] section, list out your step-by-step perception of the visual elements in the image. Be thorough but concise. Wrap each step in <step_1>, <step_2>, ... tags.
+- Under the [Visual Elements] section, list out all relevant visual elements step-by-step that relate to answering the question. Be thorough but concise. Wrap each step in <step_1>, <step_2>, ... tags.
 - Under the [Reasoning] section, explain your step-by-step reasoning process. This should include your analysis, interpretation, and how you arrived at the answer. Provide a clear justification of how you derived the answer from the data presented. Wrap each step in <step_1>, <step_2>, ... tags.
 - Present your final answer using the LaTeX-formatted box in `<correct_answer>` tags. 
 
@@ -181,12 +190,12 @@ It is crucial that your solution contains these sections in the exact format des
 </step_m>
 
 <correct_answer>
-$\boxed{numeric_string}$
+$\boxed{Your answer here}$
 </correct_answer>
 ```
 
 Remember to:
-- Provide only a single numeric string answer in the <correct_answer> section using the $\boxed{numeric_string}$ format, and no other text or commentary.""".replace('{{QUESTION}}', question)
+- Provide only a single string answer in the <correct_answer> section using the $\boxed{string_answer}$ format, and no other text or commentary.""".replace('{{QUESTION}}', question)
 
         return {
             'rollout_user_prompt': rollout_user_prompt,
@@ -272,10 +281,10 @@ def parse_response_to_perception_and_reasoning_steps_and_correct_answer(text, ma
     return result
 
 @retry(
-    stop=stop_after_attempt(15),  # More attempts for rate limits
+    stop=stop_after_attempt(3),  # More attempts for rate limits
     wait=wait_exponential(multiplier=2, min=4, max=300) + wait_random(0, 30),  # Longer backoff + jitter
     retry=retry_if_exception_type((Exception,)),
-    before_sleep=lambda retry_state: logger.warning(f"API retry {retry_state.attempt_number}/15: {type(retry_state.outcome.exception()).__name__}, retrying in {retry_state.next_action.sleep:.1f}s"),
+    before_sleep=lambda retry_state: logger.warning(f"API retry {retry_state.attempt_number}/3: {type(retry_state.outcome.exception()).__name__}, retrying in {retry_state.next_action.sleep:.1f}s"),
     reraise=True
 )
 def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000):
@@ -356,10 +365,10 @@ def build_responses_azure_parallel(inputs, num_return_sequences=1, prefixes=None
         return True
     
     @retry(
-        stop=stop_after_attempt(5),  # More task-level attempts
+        stop=stop_after_attempt(3),  # More task-level attempts
         wait=wait_exponential(multiplier=1, min=2, max=30) + wait_random(0, 10),
         retry=retry_if_exception(should_retry_task),
-        before_sleep=lambda retry_state: logger.warning(f"Input {retry_state.kwargs['args_tuple'][0]}, Seq {retry_state.kwargs['args_tuple'][1]}: Task attempt {retry_state.attempt_number}/5 failed, retrying in {retry_state.next_action.sleep:.1f}s - {type(retry_state.outcome.exception()).__name__}")
+        before_sleep=lambda retry_state: logger.warning(f"Input {retry_state.kwargs['args_tuple'][0]}, Seq {retry_state.kwargs['args_tuple'][1]}: Task attempt {retry_state.attempt_number}/3 failed, retrying in {retry_state.next_action.sleep:.1f}s - {type(retry_state.outcome.exception()).__name__}")
     )
     def process_single_request(args_tuple):
         input_idx, seq_idx, prompt, image, prefix, args_dict = args_tuple
@@ -553,8 +562,19 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
         except Exception as e:
             logger.error(f"✗ Failed to parse rollout {rollout_idx}: {e}")
             if rollout_idx < 5:  # Show first few parsing failures in detail
-                logger.error(f"Failed response text (first 500 chars):")
-                logger.error(response[:500] + "..." if len(response) > 500 else response)
+                try:
+                    logger.error("=" * 80)
+                    logger.error("Failed response text:")
+                    logger.error("-" * 40)
+                    if isinstance(response, str):
+                        logger.error(response)
+                    else:
+                        logger.error(f"Response is not a string: {type(response)}")
+                        logger.error(str(response))
+                    logger.error("-" * 40)
+                    logger.error("=" * 80)
+                except Exception as log_error:
+                    logger.error(f"Failed to log response text: {log_error}")
             # Create minimal tracking for failed rollout
             rollout_metadata[rollout_idx] = {
                 'input_data': input_data,
@@ -585,7 +605,7 @@ def build_mc_scores_maximum_throughput(inputs, response_list, items, num_return_
     logger.info(f"  Estimated time: {math.ceil(total_mc_tasks/900)*60:.0f} seconds")
     
     # Step 2: Process MC tasks with time-based firing + streaming completion tracking
-    throughput_batch_size = 500  # adjust so each batch takes about 1 minute (which maximizes the 1M TPM)
+    throughput_batch_size = 1750  # either 5M or 4M TPM # adjust so each batch takes about 1 minute (which maximizes the 1M TPM)
     all_batches = [mc_task_queue[i:i+throughput_batch_size] for i in range(0, total_mc_tasks, throughput_batch_size)]
     
     # Output file for streaming saves
@@ -896,14 +916,14 @@ args = {
     'endpoint': endpoint,
     'deployment': deployment,
     'api_version': api_version,
-    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/VQAv2/prepared_jsonl/vqav2_run1_int_only_4K_v1_subset.jsonl',
-    'out_dir': 'vqav2_int_rollouts_output',
+    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/PuzzleTest/prepared_jsonl/AlgoPuzzleVQA_train_run1_1K_v1_subset.jsonl',
+    'out_dir': 'puzzle_test_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 6,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
     'sample_start_idx': 3201, # for line-based idx, start from 1-indexed
     'sample_end_idx': 4000,
-    'prompt_format_version': 'dvqa_v1_int_only', # dvqa_v1_int_only reused for integer-only, exact match. Includes negative number matching
-    'scoring_mode': 'vqav2_num_str_only_score',
+    'prompt_format_version': 'dvqa_v1_int_only', # reuse boxed answer format, and open ended scoring handled by ai2d 
+    'scoring_mode': 'ai2d_open_answer_score', # reuse for open ans
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
@@ -966,7 +986,7 @@ def main():
     logger.info(f"Log file: {log_filepath}")
 
     # Load and process RAVEN dataset
-    dataset = VQAv2_V1_INT_ONLYDataset(
+    dataset = PuzzleTestDataset(
         data=args['prompt_path'],
         sample_start_idx=args['sample_start_idx'],
         sample_end_idx=args['sample_end_idx'],
@@ -1149,3 +1169,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+# TODO: Change parameters above
+# run ./run_rollout.sh (no args)
