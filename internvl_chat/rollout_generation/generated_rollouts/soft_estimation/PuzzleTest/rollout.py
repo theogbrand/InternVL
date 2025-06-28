@@ -39,8 +39,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbnezzbq-canadaeast.cognitiveservices.azure.com/"
-deployment = "gpt-4.1-19"
+endpoint = "https://decla-mbnfhzpq-uaenorth.cognitiveservices.azure.com/"
+deployment = "gpt-4.1"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -926,12 +926,12 @@ args = {
     'endpoint': endpoint,
     'deployment': deployment,
     'api_version': api_version,
-    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/PuzzleTest/prepared_jsonl/PuzzleVQA_train_run1_1K_v1_subset.jsonl',
+    'prompt_path': '/data/users/brandon/ob1-projects/InternVL/internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/PuzzleTest/prepared_jsonl/AlgoPuzzleVQA_train_run1_1K_v1_subset.jsonl',
     'out_dir': 'puzzle_test_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 4,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
-    'sample_start_idx': 835, # for line-based idx, start from 1-indexed
-    'sample_end_idx': 1000,
+    'sample_start_idx': 751, # for line-based idx, start from 1-indexed
+    'sample_end_idx': 900,
     'prompt_format_version': 'dvqa_v1_int_only', # reuse boxed answer format, and open ended scoring handled by ai2d 
     'scoring_mode': 'ai2d_open_answer_score', # reuse for open ans
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
