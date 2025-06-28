@@ -26,6 +26,7 @@ from tenacity import (
 )
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import atexit
 
 # Initialize logger early to avoid NameError issues
 logger = logging.getLogger('PuzzleTest_rollout')
@@ -38,8 +39,8 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbnfcymf-spaincentral.cognitiveservices.azure.com/"
-deployment = "gpt-4.1-22"
+endpoint = "https://decla-mbnf5lgw-italynorth.cognitiveservices.azure.com/"
+deployment = "gpt-4.1-20"
 api_version = "2025-01-01-preview"
 
 client = AzureOpenAI(
@@ -304,6 +305,13 @@ def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000)
         # Log detailed error information for monitoring
         error_type = type(e).__name__
         error_msg = str(e)
+        
+        # Check for content filter violation - DO NOT RETRY, return error message
+        if ('BadRequestError' in error_type and 
+            'Error code: 400' in error_msg and 
+            ('ResponsibleAIPolicyViolation' in error_msg or 'content_filter' in error_msg)):
+            logger.warning(f"Content filter violation detected, returning error response: {error_msg}")
+            return "Error code 400: content filter violation returned"
         
         # Extract rate limit details if available
         if hasattr(e, 'response') and hasattr(e.response, 'headers'):
@@ -752,7 +760,9 @@ def build_rollout_output(rollout_idx, rollout_meta, args):
                 correctness = check_answer(
                     answer_pred=answer_pred,
                     answer_gt=str(rollout_meta['item']['answer']),
-                    mode=args.get('scoring_mode', '')
+                    mode=args.get('scoring_mode', ''),
+                    image_path=rollout_meta['item']['image_path'],
+                    question=rollout_meta['item']['question']
                 )
                 mc_details.append(f"MC{mc_idx}: {answer_pred} -> {correctness}")
             except Exception as e:
@@ -928,7 +938,7 @@ args = {
     'max_perception_steps': 12,
     'max_reasoning_steps': 12,
     'early_stop': False, # when a step results in an incorrect answer we immediately stop rollouts from THAT step.
-    'max_new_tokens': 8192,
+    'max_new_tokens': 4096,
     'temperature': 1.0,
     'max_workers': (os.cpu_count() or 4) * 8,  # 8x CPU cores for I/O-bound API calls
     'debug_granular': True,  # Enable granular rollout-level debug logging
@@ -964,7 +974,14 @@ def main():
     simple_formatter = logging.Formatter('%(message)s')
 
     # File handler - detailed logging (includes DEBUG)
-    file_handler = logging.FileHandler(log_filepath)
+    # Add basic log rotation to prevent disk issues
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        log_filepath,
+        maxBytes=100*1024*1024,  # 100MB per file
+        backupCount=2,  # Keep 2 backup files
+        encoding='utf-8'
+    )
     file_handler.setLevel(logging.DEBUG)  # Save all debug info to file
     file_handler.setFormatter(detailed_formatter)
 
@@ -975,15 +992,18 @@ def main():
     console_handler.setLevel(console_level)
     console_handler.setFormatter(simple_formatter)
 
-    # Add handlers to logger
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+    # Add handlers to logger (prevent duplicates)
+    if not logger.handlers:
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
 
     logger.info(f"Starting RAVEN rollout generation")
     logger.info(f"Configuration: {args}")
     logger.info(f"Using Azure OpenAI endpoint: {endpoint}")
     logger.info(f"Model deployment: {deployment}")
     logger.info(f"Log file: {log_filepath}")
+
+    atexit.register(lambda: logging.shutdown())
 
     # Load and process RAVEN dataset
     dataset = PuzzleTestDataset(
@@ -1169,5 +1189,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-# TODO: Change parameters above
+# TODO: Change config parameters above
 # run ./run_rollout.sh (no args)
