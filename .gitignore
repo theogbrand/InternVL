@@ -1,3 +1,5 @@
+internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/PuzzleTest/AlgoPuzzleVQA/*
+internvl_chat/rollout_generation/preprocessed_prompts/preprocessing_scripts/PuzzleTest/PuzzleVQA/*
 internvl_chat/rollout_generation/generated_rollouts/soft_estimation/InfoVQA/verification/verification_pipeline_outputs/*
 internvl_chat/rollout_generation/generated_rollouts/soft_estimation/InfoVQA/final_rollout_output/*
 internvl_chat/rollout_generation/generated_rollouts/soft_estimation/AI2D/verification/verification_pipeline_outputs/*
