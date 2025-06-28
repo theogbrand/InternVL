@@ -454,10 +454,12 @@ def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=Non
     """Use Azure OpenAI GPT-4.1-mini to judge if the answer is acceptable"""
     # Return 0 if either answer is empty
     if not answer_pred.strip() or not answer_gt.strip():
+        logger.warning(f"🟠 [CORRECTNESS_JUDGE_API] Empty LLM answer: {answer_pred} or empty gt answer: {answer_gt}")
         return 0
         
     # Early return if answers match exactly (case-insensitive)
     if answer_pred.lower() == answer_gt.lower():
+        logger.warning(f"🟠 [CORRECTNESS_JUDGE_API] Exact match when answer and ground truth are lower-cased: {answer_pred} == {answer_gt}")
         return 1
         
     client = AzureOpenAI(
