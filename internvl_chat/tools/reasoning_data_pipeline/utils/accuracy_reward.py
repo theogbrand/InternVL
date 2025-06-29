@@ -3,7 +3,7 @@ import os
 import base64
 from io import BytesIO
 from PIL import Image
-from openai import AzureOpenAI
+from openai import AzureOpenAI, OpenAI
 from sympy import latex
 from sympy.parsing.latex import parse_latex
 from tqdm import tqdm
@@ -462,10 +462,14 @@ def ai2d_open_answer_score(answer_pred, answer_gt, image_path=None, question=Non
         logger.warning(f"🟠 [CORRECTNESS_JUDGE_API] Exact match when answer and ground truth are lower-cased: {answer_pred} == {answer_gt}")
         return 1
         
-    client = AzureOpenAI(
-        api_version="2025-01-01-preview",
-        azure_endpoint="https://decla-mbnf99mc-koreacentral.cognitiveservices.azure.com/",
-        api_key=os.getenv("AZURE_CORRECTNESSJUDGE_API_KEY"),
+    # client = AzureOpenAI(
+    #     api_version="2025-01-01-preview",
+    #     azure_endpoint="https://decla-mbnf99mc-koreacentral.cognitiveservices.azure.com/",
+    #     api_key=os.getenv("AZURE_CORRECTNESSJUDGE_API_KEY"),
+    #     timeout=60.0
+    # )
+    client = OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
         timeout=60.0
     )
     
@@ -513,6 +517,16 @@ SPELLING AND TYPOS: If the predicted answer has minor spelling mistakes or typos
     #     })
     
     try:
+        # Azure OpenAI
+        # response = client.beta.chat.completions.parse(
+        #     messages=messages,
+        #     model="gpt-4.1-nano",
+        #     temperature=0.0,
+        #     max_tokens=10,
+        #     response_format=AnswerAcceptability
+        # )
+
+        # OpenAI
         response = client.beta.chat.completions.parse(
             messages=messages,
             model="gpt-4.1-nano",
