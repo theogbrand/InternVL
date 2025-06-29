@@ -7,7 +7,7 @@ import httpx
 from pathlib import Path
 from typing import List, Optional
 # from dataclasses import dataclass
-from openai import AzureOpenAI, BadRequestError
+from openai import AzureOpenAI, BadRequestError, OpenAI
 import uuid
 import re
 import argparse
@@ -56,10 +56,15 @@ class BatchProcessor:
             pool=10.0      # Connection pool timeout
         )
         
-        self.client = AzureOpenAI(
+        # self.client = AzureOpenAI(
+        #     api_key=key,  
+        #     api_version="2025-03-01-preview",
+        #     azure_endpoint=endpoint,
+        #     timeout=timeout,
+        #     max_retries=3  # Add automatic retries with exponential backoff
+        # )
+        self.client = OpenAI(
             api_key=key,  
-            api_version="2025-03-01-preview",
-            azure_endpoint=endpoint,
             timeout=timeout,
             max_retries=3  # Add automatic retries with exponential backoff
         )
@@ -249,7 +254,7 @@ class BatchProcessor:
                 file_response = self.client.files.create(
                     file=f,
                     purpose="batch",
-                    extra_body={"expires_after": {"seconds": 2592000, "anchor": "created_at"}}  # 30 days per docs
+                    # extra_body={"expires_after": {"seconds": 2592000, "anchor": "created_at"}}  # 30 days per docs
                 )
             
             job.file_id = file_response.id
@@ -286,9 +291,10 @@ class BatchProcessor:
                 try:
                     batch_response = self.client.batches.create(
                         input_file_id=job.file_id,
-                        endpoint="/chat/completions",
+                        # endpoint="/chat/completions", # for Azure OpenAI
+                        endpoint="/v1/chat/completions", # for OpenAI
                         completion_window="24h",
-                        extra_body={"output_expires_after": {"seconds": 2592000, "anchor": "created_at"}}  # 30 days per docs
+                        # extra_body={"output_expires_after": {"seconds": 2592000, "anchor": "created_at"}}  # 30 days per docs
                     )
                     
                     job.batch_id = batch_response.id
