@@ -12,7 +12,7 @@ from mimetypes import guess_type
 from collections import defaultdict
 import torch
 from PIL import Image
-from openai import AzureOpenAI
+from openai import AzureOpenAI, OpenAI
 from tqdm import tqdm
 from tenacity import (
     retry,
@@ -27,6 +27,7 @@ from tenacity import (
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import atexit
+import httpx
 
 # Initialize logger early to avoid NameError issues
 logger = logging.getLogger('PuzzleTest_rollout')
@@ -39,15 +40,27 @@ from reasoning_data_pipeline.utils.accuracy_reward import (check_answer, parse_a
 from reasoning_data_pipeline.utils.utils import localtime
 
 # Azure OpenAI Configuration
-endpoint = "https://decla-mbnfhzpq-uaenorth.cognitiveservices.azure.com/"
+endpoint = "https://openai.com/"
 deployment = "gpt-4.1"
 api_version = "2025-01-01-preview"
 
-client = AzureOpenAI(
-    api_version=api_version,
-    azure_endpoint=endpoint,
-    api_key=os.getenv("AZURE_API_KEY"),
-    timeout=60.0,  # 60 second timeout
+# client = AzureOpenAI(
+#     api_version=api_version,
+#     azure_endpoint=endpoint,
+#     api_key=os.getenv("AZURE_API_KEY"),
+#     timeout=60.0,  # 60 second timeout
+# )
+
+timeout = httpx.Timeout(
+            connect=10.0,  # Connection timeout
+            read=120.0,    # Read timeout (increased to handle longer operations)
+            write=30.0,    # Write timeout
+            pool=10.0      # Connection pool timeout
+        )
+client = OpenAI(
+    timeout=timeout,
+    api_key=os.getenv("OPENAI_API_KEY"),
+    max_retries=3  # Add automatic retries with exponential backoff
 )
 
 # Global shutdown flag for graceful termination
@@ -291,12 +304,23 @@ def parse_response_to_perception_and_reasoning_steps_and_correct_answer(text, ma
 def make_azure_request(messages, max_tokens, temperature, estimated_tokens=1000):
     """Make Azure OpenAI request with retry logic"""
     try:
+        # Azure OpenAI
+        # response = client.chat.completions.create(
+        #     messages=messages,
+        #     max_completion_tokens=max_tokens,
+        #     model=deployment,
+        #     temperature=temperature,
+        #     timeout=120.0
+        # )
+        
+        # return response.choices[0].message.content
+
+        # OpenAI
         response = client.chat.completions.create(
             messages=messages,
             max_completion_tokens=max_tokens,
             model=deployment,
             temperature=temperature,
-            timeout=120.0
         )
         
         return response.choices[0].message.content
@@ -930,8 +954,8 @@ args = {
     'out_dir': 'puzzle_test_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 4,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
-    'sample_start_idx': 751, # for line-based idx, start from 1-indexed
-    'sample_end_idx': 900,
+    'sample_start_idx': 1, # for line-based idx, start from 1-indexed
+    'sample_end_idx': 2,
     'prompt_format_version': 'dvqa_v1_int_only', # reuse boxed answer format, and open ended scoring handled by ai2d 
     'scoring_mode': 'ai2d_open_answer_score', # reuse for open ans
     'num_mc_sequences': 16,  # 16 MC sequences per rollout

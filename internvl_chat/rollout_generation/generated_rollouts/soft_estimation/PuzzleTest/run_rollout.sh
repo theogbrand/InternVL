@@ -19,9 +19,16 @@ start_rollout() {
     echo "Starting PuzzleTest rollout with streaming support..."
     
     # Check API key
-    if [ -z "$AZURE_API_KEY" ]; then
-        echo "Error: AZURE_API_KEY not set"
+    if [ -n "$AZURE_API_KEY" ]; then
+        echo "Using AZURE_API_KEY"
+        API_KEY="$AZURE_API_KEY"
+    elif [ -n "$OPENAI_API_KEY" ]; then
+        echo "Using OPENAI_API_KEY"
+        API_KEY="$OPENAI_API_KEY"
+    else
+        echo "Error: Neither AZURE_API_KEY nor OPENAI_API_KEY is set"
         echo "Run: export AZURE_API_KEY='your-key-here'"
+        echo "Or: export OPENAI_API_KEY='your-key-here'"
         exit 1
     fi
     
@@ -30,7 +37,8 @@ start_rollout() {
     # Run in screen session
     screen -dmS "$SCREEN_NAME" bash -c "
         # Set environment variables inside screen session
-        export AZURE_API_KEY='$AZURE_API_KEY'
+        export AZURE_API_KEY='$API_KEY'
+        export OPENAI_API_KEY='$API_KEY'
         export PYTHONUNBUFFERED=1
         export OMP_NUM_THREADS=4
         
