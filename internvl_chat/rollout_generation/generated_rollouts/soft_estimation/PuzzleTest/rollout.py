@@ -954,8 +954,8 @@ args = {
     'out_dir': 'puzzle_test_rollouts_output',
     'batch_size': 15,  # ~20 samples per batch
     'num_return_sequences': 4,  # 20×4 = 80 requests per batch (ensure this is FAST less than 20s so we are rate limited at the TPM level in phase 2)
-    'sample_start_idx': 1, # for line-based idx, start from 1-indexed
-    'sample_end_idx': 2,
+    'sample_start_idx': 121, # for line-based idx, start from 1-indexed
+    'sample_end_idx': 167,
     'prompt_format_version': 'dvqa_v1_int_only', # reuse boxed answer format, and open ended scoring handled by ai2d 
     'scoring_mode': 'ai2d_open_answer_score', # reuse for open ans
     'num_mc_sequences': 16,  # 16 MC sequences per rollout
