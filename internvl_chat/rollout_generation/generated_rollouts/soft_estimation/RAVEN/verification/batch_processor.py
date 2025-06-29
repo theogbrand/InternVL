@@ -22,6 +22,9 @@ class BatchJob(BaseModel):
     batch_id: Optional[str] = None
     output_file_id: Optional[str] = None
     error_file_id: Optional[str] = None
+    expires_at: Optional[int] = None  # Track batch expiration time
+    request_count: int = 0  # Track number of requests in batch
+    file_size_mb: float = 0.0  # Track file size in MB
     
     class Config:
         from_attributes = True  # For ORM compatibility
@@ -206,11 +209,47 @@ class BatchProcessor:
             self.logger.info(f"Uploading file: {filename}")
             print(f"📤 Uploading file: {filename}")
             
+            # Check file size (200 MB limit)
+            file_path = Path(job.input_file)
+            file_size_mb = file_path.stat().st_size / (1024 * 1024)
+            job.file_size_mb = file_size_mb
+            
+            if file_size_mb > 200:
+                error_msg = f"File {filename} exceeds 200 MB limit: {file_size_mb:.1f} MB"
+                self.logger.error(error_msg)
+                print(f"❌ {error_msg}")
+                job.status = "file_too_large"
+                return False
+            
+            # Count requests in the file (50,000 request limit)
+            request_count = 0
+            try:
+                with open(job.input_file, 'r') as f:
+                    for line in f:
+                        if line.strip():  # Count non-empty lines
+                            request_count += 1
+                            
+                job.request_count = request_count
+                
+                if request_count > 50000:
+                    error_msg = f"File {filename} exceeds 50,000 request limit: {request_count} requests"
+                    self.logger.error(error_msg)
+                    print(f"❌ {error_msg}")
+                    job.status = "too_many_requests"
+                    return False
+                    
+                self.logger.info(f"File stats: {file_size_mb:.1f} MB, {request_count} requests")
+                print(f"📊 File stats: {file_size_mb:.1f} MB, {request_count} requests")
+                
+            except Exception as e:
+                self.logger.warning(f"Could not count requests in file: {str(e)}")
+                # Continue with upload even if we can't count requests
+            
             with open(job.input_file, "rb") as f:
                 file_response = self.client.files.create(
                     file=f,
                     purpose="batch",
-                    extra_body={"expires_after": {"seconds": 1209600, "anchor": "created_at"}}  # 14 days
+                    extra_body={"expires_after": {"seconds": 2592000, "anchor": "created_at"}}  # 30 days per docs
                 )
             
             job.file_id = file_response.id
@@ -249,12 +288,14 @@ class BatchProcessor:
                         input_file_id=job.file_id,
                         endpoint="/chat/completions",
                         completion_window="24h",
-                        extra_body={"output_expires_after": {"seconds": 1209600, "anchor": "created_at"}}  # 14 days
+                        extra_body={"output_expires_after": {"seconds": 2592000, "anchor": "created_at"}}  # 30 days per docs
                     )
                     
                     job.batch_id = batch_response.id
                     job.status = "batch_created"
                     job.created_at = batch_response.created_at
+                    if hasattr(batch_response, 'expires_at'):
+                        job.expires_at = batch_response.expires_at
                     
                     self.logger.info(f"Batch created successfully: {job.batch_id}")
                     print(f"✅ Batch created: {job.batch_id}")
@@ -296,7 +337,10 @@ class BatchProcessor:
             print(f"⏳ Monitoring batch for file: {filename}")
             
             status = "validating"
-            while status not in ("completed", "failed", "canceled"):
+            # Updated to include all terminal statuses from the documentation
+            terminal_statuses = ("completed", "failed", "canceled", "cancelled", "expired")
+            
+            while status not in terminal_statuses:
                 time.sleep(60)  # Check every minute
                 
                 batch_response = self.client.batches.retrieve(job.batch_id)
@@ -304,6 +348,14 @@ class BatchProcessor:
                 
                 self.logger.info(f"Batch {job.batch_id} status: {status}")
                 print(f"📊 Batch status: {status}")
+                
+                # Handle status-specific logging
+                if status == "finalizing":
+                    self.logger.info(f"Batch {job.batch_id} is finalizing - results being prepared")
+                    print(f"⏳ Batch is finalizing - results being prepared")
+                elif status == "cancelling":
+                    self.logger.info(f"Batch {job.batch_id} is being cancelled (may take up to 10 minutes)")
+                    print(f"🚫 Batch is being cancelled (may take up to 10 minutes)")
                 
                 job.status = f"batch_{status}"
             
@@ -315,8 +367,16 @@ class BatchProcessor:
                 self.logger.info(f"Batch completed successfully: {job.batch_id}")
                 print(f"✅ Batch completed successfully")
                 return True
+            elif status == "expired":
+                job.status = "expired"
+                job.output_file_id = batch_response.output_file_id  # May contain partial results
+                job.error_file_id = batch_response.error_file_id
+                
+                self.logger.warning(f"Batch expired - did not complete within 24-hour window: {job.batch_id}")
+                print(f"⏰ Batch expired - did not complete within 24-hour window")
+                return False
             else:
-                job.status = "failed"
+                job.status = "failed" if status == "failed" else status
                 if batch_response.errors:
                     for error in batch_response.errors.data:
                         self.logger.error(f"Batch error - Code: {error.code}, Message: {error.message}")
@@ -346,49 +406,91 @@ class BatchProcessor:
             
             verification_results = []
             error_sample_ids = []
+            expired_sample_ids = []
             
-            # Use output_file_id if available, otherwise error_file_id
-            file_id = job.output_file_id or job.error_file_id
+            # Process output file if available
+            if job.output_file_id:
+                try:
+                    file_response = self.client.files.content(job.output_file_id)
+                    raw_responses = file_response.text.strip().split('\n')
+                    
+                    for raw_response in raw_responses:
+                        if not raw_response:  # Skip empty lines
+                            continue
+                            
+                        json_response = json.loads(raw_response)
+                        
+                        # Check if response exists and has valid status
+                        if json_response.get("response") and json_response["response"].get("status_code") == 200:
+                            # Create verification entry for successful responses
+                            verification_entry = {
+                                "custom_id": json_response["custom_id"],
+                                "verification_response": json_response["response"]["body"]["choices"][0]["message"]["content"]
+                            }
+                            verification_results.append(verification_entry)
+                        else:
+                            error_sample_ids.append(json_response["custom_id"])
+                            
+                except Exception as e:
+                    self.logger.error(f"Error processing output file: {str(e)}")
+                    print(f"⚠️ Error processing output file: {str(e)}")
             
-            if file_id:
-                file_response = self.client.files.content(file_id)
-                raw_responses = file_response.text.strip().split('\n')
-                
-                for raw_response in raw_responses:
-                    json_response = json.loads(raw_response)
+            # Process error file if available (includes expired requests)
+            if job.error_file_id:
+                try:
+                    error_file_response = self.client.files.content(job.error_file_id)
+                    error_responses = error_file_response.text.strip().split('\n')
                     
-                    # Check for error status codes
-                    if json_response["response"]["status_code"] != 200:
-                        error_sample_ids.append(json_response["custom_id"])
-                        continue
-                    
-                    # Create verification entry for successful responses
-                    verification_entry = {
-                        "custom_id": json_response["custom_id"],
-                        "verification_response": json_response["response"]["body"]["choices"][0]["message"]["content"]
-                    }
-                    
-                    verification_results.append(verification_entry)
-                
-                # Save verification results
+                    for error_response in error_responses:
+                        if not error_response:  # Skip empty lines
+                            continue
+                            
+                        error_json = json.loads(error_response)
+                        custom_id = error_json.get("custom_id", "unknown")
+                        
+                        # Check for expired requests specifically
+                        if error_json.get("error", {}).get("code") == "batch_expired":
+                            expired_sample_ids.append(custom_id)
+                            self.logger.warning(f"Request {custom_id} expired: {error_json['error']['message']}")
+                        else:
+                            error_sample_ids.append(custom_id)
+                            error_msg = error_json.get("error", {}).get("message", "Unknown error")
+                            self.logger.error(f"Request {custom_id} failed: {error_msg}")
+                            
+                except Exception as e:
+                    self.logger.error(f"Error processing error file: {str(e)}")
+                    print(f"⚠️ Error processing error file: {str(e)}")
+            
+            # Save verification results
+            if verification_results:
                 with open(output_path, 'w') as f:
                     json.dump(verification_results, f, indent=2)
                 
                 self.logger.info(f"Saved {len(verification_results)} verification results to {output_path}")
                 print(f"💾 Saved {len(verification_results)} verification results to {output_filename}")
+            
+            # Log summary
+            total_processed = len(verification_results) + len(error_sample_ids) + len(expired_sample_ids)
+            self.logger.info(f"Processing summary for {filename}:")
+            self.logger.info(f"  - Total requests: {total_processed}")
+            self.logger.info(f"  - Successful: {len(verification_results)}")
+            self.logger.info(f"  - Failed: {len(error_sample_ids)}")
+            self.logger.info(f"  - Expired: {len(expired_sample_ids)}")
+            
+            if error_sample_ids:
+                self.logger.warning(f"Failed sample IDs: {error_sample_ids[:10]}{'...' if len(error_sample_ids) > 10 else ''}")
+                print(f"⚠️  {len(error_sample_ids)} samples failed")
                 
-                if error_sample_ids:
-                    self.logger.warning(f"Error sample IDs with status_code != 200: {error_sample_ids}")
-                    print(f"⚠️  {len(error_sample_ids)} samples had errors")
-                else:
-                    self.logger.info("All samples processed successfully with status_code 200")
-                    print("✅ All samples processed successfully")
-                
-                return True
-            else:
-                self.logger.error("No output or error file ID available")
-                print("❌ No output or error file ID available")
-                return False
+            if expired_sample_ids:
+                self.logger.warning(f"Expired sample IDs: {expired_sample_ids[:10]}{'...' if len(expired_sample_ids) > 10 else ''}")
+                print(f"⏰ {len(expired_sample_ids)} samples expired")
+            
+            if not error_sample_ids and not expired_sample_ids:
+                self.logger.info("All samples processed successfully")
+                print("✅ All samples processed successfully")
+            
+            # Return True if we processed any results successfully
+            return True
                 
         except Exception as e:
             error_msg = f"Failed to process results for {filename}: {str(e)}"
@@ -461,6 +563,20 @@ class BatchProcessor:
             
             filename = Path(job.input_file).name
             
+            # Log non-terminal statuses
+            if status == "finalizing":
+                self.logger.info(f"Batch {filename} is finalizing - results being prepared")
+                print(f"⏳ Batch is finalizing: {filename}")
+                return False
+            elif status == "cancelling":
+                self.logger.info(f"Batch {filename} is being cancelled (may take up to 10 minutes)")
+                print(f"🚫 Batch is being cancelled: {filename}")
+                return False
+            elif status in ("validating", "in_progress"):
+                self.logger.info(f"Batch {filename} status: {status}")
+                return False
+            
+            # Handle terminal statuses
             if status == "completed":
                 job.output_file_id = batch_response.output_file_id
                 job.error_file_id = batch_response.error_file_id
@@ -502,7 +618,7 @@ class BatchProcessor:
                 
                 return True
                 
-            elif status == "canceled":
+            elif status in ("canceled", "cancelled"):  # Handle both spellings
                 job.status = "canceled"
                 self.failed_jobs.append(job)
                 if job in self.my_active_jobs:
@@ -512,9 +628,31 @@ class BatchProcessor:
                 print(f"⚠️ Batch canceled: {filename}")
                 return True
                 
+            elif status == "expired":
+                job.status = "expired"
+                job.output_file_id = batch_response.output_file_id  # May contain partial results
+                job.error_file_id = batch_response.error_file_id
+                
+                self.logger.warning(f"Batch expired - did not complete within 24-hour window: {filename}")
+                print(f"⏰ Batch expired: {filename}")
+                
+                # Try to process any partial results
+                if job.output_file_id or job.error_file_id:
+                    self.logger.info(f"Processing partial results for expired batch: {filename}")
+                    if self.process_results(job):
+                        self.logger.info(f"Partial results saved for expired batch: {filename}")
+                    else:
+                        self.logger.warning(f"Failed to process partial results for expired batch: {filename}")
+                
+                self.failed_jobs.append(job)
+                if job in self.my_active_jobs:
+                    self.my_active_jobs.remove(job)
+                
+                return True
+                
             else:
-                # Still in progress
-                self.logger.info(f"Batch {filename} status: {status}")
+                # Unknown status - log and continue monitoring
+                self.logger.warning(f"Unknown batch status '{status}' for {filename}")
                 return False
                 
         except Exception as e:
